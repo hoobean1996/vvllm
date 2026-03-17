@@ -1,0 +1,17 @@
+cc_library(
+    name = "quantize",
+    srcs = ["quantize.cc"],
+    deps = [
+        "//include/vvllm/quantize",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "quantize_test",
+    srcs = ["quantize_test.cc"],
+    deps = [
+        ":quantize",
+        "@googletest//:gtest_main",
+    ],
+)

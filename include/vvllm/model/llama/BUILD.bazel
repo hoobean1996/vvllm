@@ -1,0 +1,14 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "llama",
+    hdrs = ["model.h"],
+    strip_include_prefix = "//include",
+    deps = [
+        "//include/vvllm/backend",
+        "//include/vvllm/config",
+        "//include/vvllm/model:transformer",
+        "//include/vvllm/quantize",
+        "//include/vvllm/tensor",
+    ],
+)

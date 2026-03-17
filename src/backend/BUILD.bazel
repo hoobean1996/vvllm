@@ -1,0 +1,71 @@
+cc_library(
+    name = "backend",
+    srcs = ["backend_naive.cc"],
+    hdrs = ["backend_naive.h"],
+    copts = select({
+        "@platforms//cpu:x86_64": ["-mavx2", "-mfma"],
+        "//conditions:default": [],
+    }),
+    deps = ["//include/vvllm/backend"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "backend_blas",
+    srcs = ["backend_blas.cc"],
+    hdrs = ["backend_blas.h"],
+    deps = [
+        ":backend",
+        "//third_party/openblas",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "backend_naive_test",
+    srcs = ["backend_naive_test.cc"],
+    deps = [
+        ":backend",
+        "@googletest//:gtest_main",
+    ],
+)
+
+# CUDA backend: compile .cu with nvcc, link into cc_library
+genrule(
+    name = "cuda_kernels_lib",
+    srcs = [
+        "cuda_kernels.cu",
+        "cuda_kernels.h",
+    ],
+    outs = ["libcuda_kernels.a"],
+    cmd = " ".join([
+        "/usr/local/cuda-12.6/bin/nvcc",
+        "-std=c++17",
+        "-O2",
+        "-arch=sm_89",
+        "-I$$(dirname $(location cuda_kernels.cu))/../..",
+        "-c $(location cuda_kernels.cu)",
+        "-o $(RULEDIR)/cuda_kernels.o",
+        "&&",
+        "ar rcs $@ $(RULEDIR)/cuda_kernels.o",
+    ]),
+)
+
+cc_import(
+    name = "cuda_kernels",
+    static_library = "libcuda_kernels.a",
+    hdrs = ["cuda_kernels.h"],
+)
+
+cc_library(
+    name = "backend_cuda",
+    srcs = ["backend_cuda.cc"],
+    hdrs = ["backend_cuda.h"],
+    deps = [
+        ":backend",
+        ":cuda_kernels",
+        "//third_party/cuda:cublas",
+        "//third_party/cuda:cuda_runtime",
+    ],
+    visibility = ["//visibility:public"],
+)

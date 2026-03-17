@@ -1,0 +1,11 @@
+cc_library(
+    name = "llama",
+    srcs = ["model.cc"],
+    deps = [
+        "//include/vvllm/model/llama",
+        "//src/model:kv_cache",
+        "//src/model:transformer",
+        "//src/quantize",
+    ],
+    visibility = ["//visibility:public"],
+)

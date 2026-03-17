@@ -1,0 +1,19 @@
+cc_library(
+    name = "config",
+    srcs = ["config.cc"],
+    deps = [
+        "//include/vvllm/config",
+        "@nlohmann_json//:json",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "config_test",
+    srcs = ["config_test.cc"],
+    deps = [
+        ":config",
+        "@googletest//:gtest_main",
+        "@nlohmann_json//:json",
+    ],
+)

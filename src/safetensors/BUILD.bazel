@@ -1,0 +1,21 @@
+cc_library(
+    name = "safetensors",
+    srcs = ["safetensors.cc"],
+    deps = [
+        "//include/vvllm/safetensors",
+        "//src/tensor",
+        "@nlohmann_json//:json",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "safetensors_test",
+    srcs = ["safetensors_test.cc"],
+    deps = [
+        ":safetensors",
+        "//src/backend",
+        "@googletest//:gtest_main",
+        "@nlohmann_json//:json",
+    ],
+)

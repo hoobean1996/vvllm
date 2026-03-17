@@ -1,0 +1,7 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "sampler",
+    hdrs = ["sampler.h"],
+    strip_include_prefix = "//include",
+)

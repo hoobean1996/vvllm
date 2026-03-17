@@ -1,0 +1,8 @@
+cc_library(
+    name = "sampler",
+    srcs = ["sampler.cc"],
+    deps = [
+        "//include/vvllm/sampler",
+    ],
+    visibility = ["//visibility:public"],
+)

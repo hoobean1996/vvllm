@@ -1,0 +1,20 @@
+cc_library(
+    name = "tokenizer",
+    srcs = ["tokenizer.cc"],
+    deps = [
+        "//include/vvllm/tokenizer",
+        "@nlohmann_json//:json",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "tokenizer_test",
+    srcs = ["tokenizer_test.cc"],
+    data = ["//models:Qwen2.5-0.5B/tokenizer.json"],
+    deps = [
+        ":tokenizer",
+        "//include/vvllm/tokenizer",
+        "@googletest//:gtest_main",
+    ],
+)

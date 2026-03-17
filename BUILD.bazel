@@ -1,0 +1,32 @@
+# Root BUILD file for vvllm
+
+load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
+
+refresh_compile_commands(
+    name = "refresh_compile_commands",
+    targets = {
+        "//src/backend:backend": "",
+        "//src/backend:backend_blas": "",
+        "//src/backend:backend_cuda": "",
+        "//src/backend:backend_naive_test": "",
+        "//src/tensor:tensor": "",
+        "//src/tensor:tensor_test": "",
+        "//src/safetensors:safetensors": "",
+        "//src/safetensors:safetensors_test": "",
+        "//src/tokenizer:tokenizer": "",
+        "//src/tokenizer:tokenizer_test": "",
+        "//src/config:config": "",
+        "//src/config:config_test": "",
+        "//src/model:kv_cache": "",
+        "//src/model:transformer": "",
+        "//src/model:model": "",
+        "//src/model/qwen2": "",
+        "//src/model/llama": "",
+        "//src/quantize:quantize": "",
+        "//src/quantize:quantize_test": "",
+        "//src/sampler:sampler": "",
+        "//bin/qwen:qwen": "",
+        "//src:vvllm": "",
+        "//src/model:model_bench": "",
+    },
+)

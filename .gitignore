@@ -1,0 +1,15 @@
+# Bazel
+/bazel-*
+
+# Models (large binary files, download separately)
+/models/
+
+# Compile commands (generated)
+/compile_commands.json
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

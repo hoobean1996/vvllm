@@ -1,0 +1,16 @@
+cc_library(
+    name = "tensor",
+    srcs = ["tensor.cc"],
+    deps = ["//include/vvllm/tensor"],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "tensor_test",
+    srcs = ["tensor_test.cc"],
+    deps = [
+        ":tensor",
+        "//src/backend",
+        "@googletest//:gtest_main",
+    ],
+)

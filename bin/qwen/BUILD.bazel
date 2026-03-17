@@ -1,0 +1,17 @@
+cc_binary(
+    name = "qwen",
+    srcs = ["main.cc"],
+    deps = [
+        "//include/vvllm/safetensors",
+        "//src/backend",
+        "//src/backend:backend_blas",
+        "//src/backend:backend_cuda",
+        "//src/config",
+        "//src/model",
+        "//src/model:kv_cache",
+        "//src/safetensors",
+        "//src/sampler",
+        "//src/tokenizer",
+        "@gflags//:gflags",
+    ],
+)

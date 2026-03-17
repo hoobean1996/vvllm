@@ -1,0 +1,19 @@
+cc_library(
+    name = "cuda_runtime",
+    hdrs = glob(["include/**"]),
+    includes = ["include"],
+    linkopts = [
+        "-L/usr/local/cuda-12.6/lib64",
+        "-lcudart",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "cublas",
+    linkopts = [
+        "-L/usr/local/cuda-12.6/lib64",
+        "-lcublas",
+    ],
+    visibility = ["//visibility:public"],
+)

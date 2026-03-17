@@ -1,0 +1,43 @@
+cc_library(
+    name = "kv_cache",
+    srcs = ["kv_cache.cc"],
+    deps = [
+        "//include/vvllm/model:kv_cache",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "transformer",
+    srcs = ["transformer.cc"],
+    deps = [
+        "//include/vvllm/model:transformer",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "model",
+    srcs = ["model.cc"],
+    deps = [
+        "//include/vvllm/model",
+        "//src/model/llama",
+        "//src/model/qwen2",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_binary(
+    name = "model_bench",
+    srcs = ["model_bench.cc"],
+    deps = [
+        ":kv_cache",
+        ":transformer",
+        "//include/vvllm/model:transformer",
+        "//include/vvllm/model/llama",
+        "//src/backend",
+        "//src/backend:backend_blas",
+        "//src/quantize",
+        "@google_benchmark//:benchmark_main",
+    ],
+)

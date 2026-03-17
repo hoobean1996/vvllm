@@ -1,0 +1,6 @@
+# C++20 as the default standard
+build --cxxopt=-std=c++20
+build --host_cxxopt=-std=c++20
+
+# Readable error output
+build --verbose_failures

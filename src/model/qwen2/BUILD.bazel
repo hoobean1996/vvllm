@@ -1,0 +1,11 @@
+cc_library(
+    name = "qwen2",
+    srcs = ["model.cc"],
+    deps = [
+        "//include/vvllm/model/qwen2",
+        "//src/model:kv_cache",
+        "//src/model:transformer",
+        "//src/quantize",
+    ],
+    visibility = ["//visibility:public"],
+)
