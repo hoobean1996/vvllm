@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include "vvllm/backend/backend.h"
 
 namespace vvllm
@@ -40,6 +42,22 @@ public:
     void causal_attention(float* out, const float* q, std::size_t q_idx, const float* k,
                           const float* v, std::size_t attend_len, std::size_t num_heads,
                           std::size_t num_kv_heads, std::size_t head_dim, float scale) override;
+
+    // KV cache (CPU-resident)
+    void kv_cache_init(std::size_t num_layers, std::size_t kv_dim) override;
+    void kv_cache_append(std::size_t layer, const float* k, const float* v,
+                         std::size_t num_tokens) override;
+    const float* kv_cache_k(std::size_t layer) const override;
+    const float* kv_cache_v(std::size_t layer) const override;
+    void kv_cache_advance(std::size_t num_tokens) override;
+    void kv_cache_reset() override;
+    void kv_cache_truncate(std::size_t new_seq_len) override;
+
+private:
+    std::vector<std::vector<float>> kv_k_cache_;
+    std::vector<std::vector<float>> kv_v_cache_;
+    std::size_t kv_seq_len_ = 0;
+    std::size_t kv_dim_ = 0;
 };
 
 }  // namespace vvllm

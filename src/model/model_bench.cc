@@ -8,7 +8,6 @@
 #include "src/backend/backend_blas.h"
 #include "src/backend/backend_naive.h"
 #include "vvllm/config/config.h"
-#include "vvllm/model/kv_cache.h"
 #include "vvllm/model/llama/model.h"
 #include "vvllm/model/transformer.h"
 #include "vvllm/quantize/quantize.h"
@@ -156,19 +155,20 @@ void BM_KVCacheAppend(benchmark::State& state)
     for (auto _ : state)
     {
         state.PauseTiming();
-        vvllm::KVCache cache(num_layers);
+        vvllm::BackendCPU backend;
+        backend.kv_cache_init(num_layers, kv_dim);
         for (std::size_t l = 0; l < num_layers; l++)
         {
-            cache.append(l, prefill_k.data(), prefill_v.data(), cache_depth, kv_dim);
+            backend.kv_cache_append(l, prefill_k.data(), prefill_v.data(), cache_depth);
         }
-        cache.advance(cache_depth);
+        backend.kv_cache_advance(cache_depth);
         state.ResumeTiming();
 
         for (std::size_t l = 0; l < num_layers; l++)
         {
-            cache.append(l, new_k.data(), new_v.data(), 1, kv_dim);
+            backend.kv_cache_append(l, new_k.data(), new_v.data(), 1);
         }
-        benchmark::DoNotOptimize(cache.k_data(0));
+        benchmark::DoNotOptimize(backend.kv_cache_k(0));
     }
     state.SetItemsProcessed(state.iterations());
 }
@@ -222,7 +222,7 @@ struct TinyModel
         config.rms_norm_eps = 1e-6;
         config.rope_theta = 10000.0;
         config.bos_token_id = 0;
-        config.eos_token_id = 1;
+        config.eos_token_ids = {1};
         config.tie_word_embeddings = true;
 
         embed_tokens = random_floats(kVocabSize * kHidden, 1);
@@ -292,10 +292,10 @@ void BM_Prefill(benchmark::State& state)
 
     for (auto _ : state)
     {
-        vvllm::KVCache cache(TinyModel::kNumLayers);
+        backend.kv_cache_reset();
         auto logits = vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
                                                  model.final_norm_weight.data(), model.config,
-                                                 backend, token_ids, 0, cache);
+                                                 backend, token_ids, 0);
         benchmark::DoNotOptimize(logits.data());
     }
     state.SetItemsProcessed(state.iterations() * static_cast<long>(seq_len));
@@ -321,21 +321,20 @@ void BM_DecodeWithCache(benchmark::State& state)
         t = t % static_cast<int>(TinyModel::kVocabSize);
     }
 
-    vvllm::KVCache cache(TinyModel::kNumLayers);
     vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
                                model.final_norm_weight.data(), model.config, backend, prefill_ids,
-                               0, cache);
+                               0);
 
     // Decode a single token from the cached state
     std::vector<int> decode_id = {5};
 
     for (auto _ : state)
     {
-        // Save cache state so we can restore after each iteration
-        auto cache_copy = cache;
+        // Rewind cache to prefill state
+        backend.kv_cache_truncate(context_len);
         auto logits = vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
                                                  model.final_norm_weight.data(), model.config,
-                                                 backend, decode_id, context_len, cache_copy);
+                                                 backend, decode_id, context_len);
         benchmark::DoNotOptimize(logits.data());
     }
     state.SetItemsProcessed(state.iterations());
@@ -363,11 +362,10 @@ void BM_DecodeNoCache(benchmark::State& state)
 
     for (auto _ : state)
     {
-        // Fresh cache each time — full recompute
-        vvllm::KVCache cache(TinyModel::kNumLayers);
+        // Fresh cache each time — full recompute (pos=0 triggers reset)
         auto logits = vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
                                                  model.final_norm_weight.data(), model.config,
-                                                 backend, token_ids, 0, cache);
+                                                 backend, token_ids, 0);
         benchmark::DoNotOptimize(logits.data());
     }
     state.SetItemsProcessed(state.iterations());

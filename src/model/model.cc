@@ -24,10 +24,9 @@ void load_weights(AnyModel& model, const std::unordered_map<std::string, Tensor<
     std::visit([&](auto& m) { m.load_weights(weights, quantize); }, model);
 }
 
-std::vector<float> forward(AnyModel& model, const std::vector<int>& token_ids, std::size_t pos,
-                           KVCache& kv_cache)
+std::vector<float> forward(AnyModel& model, const std::vector<int>& token_ids, std::size_t pos)
 {
-    return std::visit([&](auto& m) { return m.forward(token_ids, pos, kv_cache); }, model);
+    return std::visit([&](auto& m) { return m.forward(token_ids, pos); }, model);
 }
 
 }  // namespace vvllm

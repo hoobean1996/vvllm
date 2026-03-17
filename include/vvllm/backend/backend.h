@@ -94,31 +94,14 @@ public:
     /// No-op for CPU backends. GPU backends download if the device copy is newer.
     virtual void flush(const void* /*ptr*/, std::size_t /*bytes*/) {}
 
-    /// GPU-resident KV cache interface.
-    /// CPU backends use the no-op defaults; BackendCUDA overrides these.
-
-    /// Allocate GPU KV buffers for the given number of layers (idempotent).
+    /// KV cache interface — each backend owns its KV cache storage.
     virtual void kv_cache_init(std::size_t /*num_layers*/, std::size_t /*kv_dim*/) {}
-
-    /// Append new K/V tokens to the GPU KV buffer for a layer.
-    /// k and v point to GPU-mirrored data (seq_len * kv_dim floats each).
     virtual void kv_cache_append(std::size_t /*layer*/, const float* /*k*/, const float* /*v*/,
                                  std::size_t /*num_tokens*/) {}
-
-    /// Return GPU pointer to cached K data for a layer, or nullptr if no GPU KV cache.
     virtual const float* kv_cache_k(std::size_t /*layer*/) const { return nullptr; }
-
-    /// Return GPU pointer to cached V data for a layer, or nullptr if no GPU KV cache.
     virtual const float* kv_cache_v(std::size_t /*layer*/) const { return nullptr; }
-
-    /// Bump the GPU KV cache sequence length after all layers are processed.
     virtual void kv_cache_advance(std::size_t /*num_tokens*/) {}
-
-    /// Reset the GPU KV cache (e.g. for --kv_cache=false recompute mode).
     virtual void kv_cache_reset() {}
-
-    /// Truncate the GPU KV cache to the given sequence length.
-    /// Used by best-of-N to rewind to the prefill state between candidates.
     virtual void kv_cache_truncate(std::size_t /*new_seq_len*/) {}
 };
 

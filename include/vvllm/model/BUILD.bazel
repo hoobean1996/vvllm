@@ -1,19 +1,12 @@
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
-    name = "kv_cache",
-    hdrs = ["kv_cache.h"],
-    strip_include_prefix = "//include",
-)
-
-cc_library(
     name = "transformer",
     hdrs = ["transformer.h"],
     strip_include_prefix = "//include",
     deps = [
         "//include/vvllm/backend",
         "//include/vvllm/config",
-        "//include/vvllm/model:kv_cache",
         "//include/vvllm/tensor",
     ],
 )
@@ -25,7 +18,6 @@ cc_library(
     deps = [
         "//include/vvllm/backend",
         "//include/vvllm/config",
-        "//include/vvllm/model:kv_cache",
         "//include/vvllm/model/llama",
         "//include/vvllm/model/qwen2",
         "//include/vvllm/tensor",

@@ -79,11 +79,10 @@ void LlamaModel::load_weights(const std::unordered_map<std::string, Tensor<float
     }
 }
 
-std::vector<float> LlamaModel::forward(const std::vector<int>& token_ids, std::size_t pos,
-                                       KVCache& kv_cache)
+std::vector<float> LlamaModel::forward(const std::vector<int>& token_ids, std::size_t pos)
 {
     return transformer_forward(layers_, embed_tokens_, final_norm_weight_, config_, backend_,
-                               token_ids, pos, kv_cache);
+                               token_ids, pos);
 }
 
 }  // namespace vvllm

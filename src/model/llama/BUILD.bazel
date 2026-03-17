@@ -3,7 +3,6 @@ cc_library(
     srcs = ["model.cc"],
     deps = [
         "//include/vvllm/model/llama",
-        "//src/model:kv_cache",
         "//src/model:transformer",
         "//src/quantize",
     ],

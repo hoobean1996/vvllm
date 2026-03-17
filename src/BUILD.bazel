@@ -1,4 +1,0 @@
-cc_binary(
-    name = "vvllm",
-    srcs = ["main.cc"],
-)

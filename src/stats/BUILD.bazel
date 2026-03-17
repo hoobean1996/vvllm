@@ -1,0 +1,8 @@
+cc_library(
+    name = "stats",
+    srcs = ["stats.cc"],
+    deps = [
+        "//include/vvllm/stats",
+    ],
+    visibility = ["//visibility:public"],
+)

@@ -9,7 +9,6 @@
 
 #include "vvllm/backend/backend.h"
 #include "vvllm/config/config.h"
-#include "vvllm/model/kv_cache.h"
 #include "vvllm/tensor/tensor.h"
 
 namespace vvllm
@@ -63,8 +62,7 @@ template <typename Attn>
 std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>& layers,
                                        const float* embed_tokens, const float* final_norm_weight,
                                        const ModelConfig& config, Backend& backend,
-                                       const std::vector<int>& token_ids, std::size_t pos,
-                                       KVCache& kv_cache)
+                                       const std::vector<int>& token_ids, std::size_t pos)
 {
     const std::size_t head_dim = config.hidden_size / config.num_attention_heads;
     const std::size_t seq_len = token_ids.size();
@@ -79,11 +77,9 @@ std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>
     // Invalidate stale GPU mirrors from previous forward passes
     backend.begin_forward();
 
-    // Initialize GPU KV cache (idempotent); reset on recompute
+    // Initialize KV cache (idempotent); reset on recompute
     backend.kv_cache_init(config.num_hidden_layers, kv_dim);
     if (pos == 0) backend.kv_cache_reset();
-
-    const bool use_gpu_kv = (backend.kv_cache_k(0) != nullptr);
 
     // Hidden state: [seq_len, hidden]
     std::vector<float> x(seq_len * hidden);
@@ -128,25 +124,10 @@ std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>
         backend.rope(q.data(), k_new.data(), seq_len, num_heads, num_kv_heads, head_dim, pos,
                      rope_theta);
 
-        // Append new K/V and get cache pointers (GPU or CPU path)
-        const float* cache_k;
-        const float* cache_v;
-        if (use_gpu_kv)
-        {
-            // GPU path: D2D copy new tokens to GPU KV buffer, no CPU involvement
-            backend.kv_cache_append(layer_idx, k_new.data(), v_new.data(), seq_len);
-            cache_k = backend.kv_cache_k(layer_idx);
-            cache_v = backend.kv_cache_v(layer_idx);
-        }
-        else
-        {
-            // CPU path: flush GPU mirrors to CPU, append to CPU KV cache
-            backend.flush(k_new.data(), k_new.size() * sizeof(float));
-            backend.flush(v_new.data(), v_new.size() * sizeof(float));
-            kv_cache.append(layer_idx, k_new.data(), v_new.data(), seq_len, kv_dim);
-            cache_k = kv_cache.k_data(layer_idx);
-            cache_v = kv_cache.v_data(layer_idx);
-        }
+        // Append new K/V to cache and get pointers
+        backend.kv_cache_append(layer_idx, k_new.data(), v_new.data(), seq_len);
+        const float* cache_k = backend.kv_cache_k(layer_idx);
+        const float* cache_v = backend.kv_cache_v(layer_idx);
 
         // attn_out = softmax(q @ K^T / sqrt(head_dim)) @ V  (K, V from cache)
         float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
@@ -184,7 +165,6 @@ std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>
     }
 
     // Advance cache position after all layers processed
-    kv_cache.advance(seq_len);
     backend.kv_cache_advance(seq_len);
 
     // 3. final_out = rms_norm(x[-1])  (last token only)

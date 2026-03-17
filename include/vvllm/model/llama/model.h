@@ -33,8 +33,7 @@ public:
 
     void load_weights(const std::unordered_map<std::string, Tensor<float>>& weights,
                       bool quantize = false);
-    std::vector<float> forward(const std::vector<int>& token_ids, std::size_t pos,
-                               KVCache& kv_cache);
+    std::vector<float> forward(const std::vector<int>& token_ids, std::size_t pos);
 
 private:
     const ModelConfig& config_;
