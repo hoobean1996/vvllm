@@ -180,6 +180,29 @@ Optimization progression on Qwen2.5-0.5B decode:
 
 `DecodeWithCache/64` at ~362us vs `DecodeNoCache/64` at ~20ms — **56x speedup**.
 
+### BPE byte token decoding
+
+**Problem**: During streaming decode, newlines displayed as `Ċ` and other control characters showed as garbled Unicode. For example:
+
+```
+...with a math problem.ĊĊOllie said    ← broken
+...with a math problem.                 ← fixed (actual newlines)
+
+Ollie said
+```
+
+**Root cause**: BPE tokenizers encode raw byte N as `chr(256 + N)`. For example, `Ċ` = chr(266) = 256 + 10 = newline byte `0x0A`. The `decode()` function only hardcoded `Ġ` (chr(288) = space) but left all other byte tokens as raw Unicode surrogates.
+
+**Solution**: Generalized the byte token conversion in `decode()` — detect all codepoints in the chr(256..511) range and convert back to raw byte `cp - 256`:
+
+```cpp
+unsigned int cp = ((c0 & 0x1F) << 6) | (c1 & 0x3F);
+if (cp >= 256 && cp < 512)
+    output += static_cast<char>(cp - 256);  // chr(256+N) → byte N
+```
+
+One universal rule replaces the previous hardcoded special case, fixing newlines, tabs, and all other byte-encoded characters.
+
 ## Known Issues
 
 ### Performance
@@ -189,9 +212,8 @@ Optimization progression on Qwen2.5-0.5B decode:
 - [x] **~~High memory usage~~** — INT8 quantization reduces weight memory from ~1.9GB to ~0.5GB (`--quantize int8`)
 
 ### Correctness / Features
-- [ ] **No chat template** — instruct models need proper prompt formatting
 - [ ] **No stop tokens** — only stops on single EOS token
-- [ ] **Tokenizer edge cases** — decode may show raw BPE bytes (e.g. `Ċ` instead of `\n`)
+- [x] **~~Tokenizer edge cases~~** — fixed, see [BPE byte token decoding](#bpe-byte-token-decoding) below
 
 ### Architecture
 - [ ] **No streaming** — generates all tokens then prints (currently prints per-token, but could be cleaner)
