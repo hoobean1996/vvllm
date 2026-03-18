@@ -2,8 +2,10 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <numeric>
 #include <stdexcept>
+#include <unordered_map>
 
 // CUDA memory functions (defined in cuda_kernels.cu, linked when CUDA is available)
 extern "C" {
@@ -17,6 +19,54 @@ void cuda_memcpy_d2d(void* dst, const void* src, size_t bytes);
 namespace vvllm
 {
 
+// ============================================================
+// CUDA caching allocator
+// ============================================================
+//
+// nsys profiling revealed cudaMalloc + cudaFree consumed 44% of CUDA API time
+// (266ms out of 600ms) because each call synchronizes the GPU. The forward pass
+// creates ~12 temporary Tensors per call, and the sizes repeat every decode step.
+//
+// Fix: cache freed GPU buffers in a free list keyed by byte size. Same-size
+// allocations are O(1) map lookups instead of device-synchronizing cudaMalloc.
+// Buffers are only truly freed at process exit.
+
+// Free list: byte_size → [ptr, ptr, ...] (multiple same-size buffers possible)
+static std::multimap<std::size_t, void*> cuda_free_list_;
+
+// Live allocations: ptr → byte_size (needed to return buffer to correct bucket)
+static std::unordered_map<void*, std::size_t> cuda_alloc_sizes_;
+
+static void* cuda_pool_alloc(std::size_t bytes)
+{
+    auto it = cuda_free_list_.find(bytes);
+    if (it != cuda_free_list_.end())
+    {
+        void* ptr = it->second;
+        cuda_free_list_.erase(it);
+        cuda_alloc_sizes_.emplace(ptr, bytes);
+        return ptr;
+    }
+    void* ptr = cuda_malloc(bytes);
+    cuda_alloc_sizes_.emplace(ptr, bytes);
+    return ptr;
+}
+
+static void cuda_pool_free(void* ptr)
+{
+    auto it = cuda_alloc_sizes_.find(ptr);
+    if (it != cuda_alloc_sizes_.end())
+    {
+        cuda_free_list_.emplace(it->second, ptr);
+        cuda_alloc_sizes_.erase(it);
+    }
+    else
+    {
+        // Not from our pool (e.g. from BackendCUDA weight cache) — real free
+        cuda_free(ptr);
+    }
+}
+
 // --- Device memory management ---
 
 void* device_allocate(Device dev, std::size_t bytes)
@@ -24,7 +74,7 @@ void* device_allocate(Device dev, std::size_t bytes)
     if (bytes == 0) return nullptr;
     if (dev == Device::CUDA)
     {
-        return cuda_malloc(bytes);
+        return cuda_pool_alloc(bytes);
     }
     void* p = std::malloc(bytes);
     if (!p) throw std::bad_alloc();
@@ -36,7 +86,7 @@ void device_deallocate(Device dev, void* ptr)
     if (!ptr) return;
     if (dev == Device::CUDA)
     {
-        cuda_free(ptr);
+        cuda_pool_free(ptr);
     }
     else
     {

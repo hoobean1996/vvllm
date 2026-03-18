@@ -82,6 +82,8 @@ models/                 # Model weights (not checked in)
 - [x] CUDA backend with GPU mirror system, GPU-resident KV cache, and fused operators (4.5x decode speedup over BLAS on Qwen2.5-0.5B)
 - [x] FP16 inference — all GPU ops use half precision with FP32 accumulation for stability (+29% decode throughput)
 - [x] Flash Attention — tiled online softmax, O(1) shared memory per head regardless of sequence length
+- [x] GPU-resident sampling — logits stay on GPU, sampler reads device pointer directly (no PCIe roundtrip)
+- [x] CUDA caching allocator — profiling-driven fix: pool GPU buffers to avoid cudaMalloc/cudaFree sync overhead (+3.3x decode)
 
 ## Benchmarks
 
@@ -198,6 +200,45 @@ Decode throughput remains stable across sequence lengths:
 
 *Measured on Qwen2.5-0.5B, RTX 4060, `--backend cuda --quantize int8 --fp16`.*
 
+### Profiling-driven optimization: CUDA caching allocator
+
+**How we found it**: `nsys profile --trace=cuda,osrt --stats=true` revealed the CUDA API time breakdown:
+
+```
+ Time (%)  Total Time (ns)  Num Calls   Name
+ --------  ---------------  ---------   ----------------------------------
+     36.0        216913486       1341   cudaFree           ← 36%!
+     33.6        202353991       2963   cudaMemcpy
+     17.3        104017852      17773   cudaLaunchKernel   ← actual compute
+      8.2         49292731       1341   cudaMalloc         ← 8%!
+```
+
+**cudaMalloc + cudaFree consumed 44% of CUDA API time (266ms)** — more than the actual GPU kernels (104ms). Each call synchronizes the GPU, stalling the pipeline. The 1341 calls came from `transformer_forward` creating ~12 temporary Tensors (x, norm_out, q, k, v, attn_out, gate_up, gate, final_out, logits...) per forward pass, with 54 forward calls (4 prefill + 50 decode).
+
+**Fix**: A caching allocator in `device_allocate()`/`device_deallocate()` — freed GPU buffers go into a free list keyed by byte size. Same-size allocations are O(1) map lookups. Since decode tensors have the same shapes every step, the pool achieves near-100% hit rate after the first forward pass.
+
+**After** (`nsys` verification):
+
+```
+ Time (%)  Total Time (ns)  Num Calls   Name
+ --------  ---------------  ---------   ----------------------------------
+      7.5         45833654        751   cudaMalloc         ← -44% calls
+      7.3         44586600        729   cudaFree           ← -79% time!
+     16.6        101269184      17773   cudaLaunchKernel   ← unchanged
+```
+
+cudaFree dropped from 217ms to 45ms. 612 allocations were served from the pool, avoiding device-synchronizing malloc/free pairs entirely.
+
+| Metric | Before (no pool) | After (caching) | Improvement |
+|--------|-----------------|-----------------|-------------|
+| Decode throughput | 153 tok/s | **504 tok/s** | **+3.3x** |
+| Decode avg latency | 6.5 ms | **2.0 ms** | **-69%** |
+| Decode P50 latency | 6.0 ms | **1.6 ms** | **-73%** |
+| cudaMalloc calls | 1341 | 751 | -44% |
+| cudaFree time | 217 ms | 45 ms | -79% |
+
+*Measured on Qwen2.5-0.5B (50 decode tokens), RTX 4060, `--backend cuda --quantize int8 --fp16`.*
+
 ### KV cache impact
 
 `DecodeWithCache/64` at ~362us vs `DecodeNoCache/64` at ~20ms — **56x speedup**.
@@ -261,6 +302,7 @@ One universal rule replaces the previous hardcoded special case, fixing newlines
 6. ~~**GPU backend**~~ — done, CUDA backend with GPU mirror system + GPU-resident KV cache + fused ops, 4.5x decode speedup
 7. ~~**FP16 inference**~~ — done, +29% decode throughput with half-precision GPU ops
 8. ~~**Flash Attention**~~ — done, tiled online softmax with O(1) shared memory, unlocks long context
+9. ~~**CUDA caching allocator**~~ — done, profiling-driven: pool GPU buffers, 3.3x decode speedup
 
 ## Build Requirements
 
