@@ -203,6 +203,14 @@ if (cp >= 256 && cp < 512)
 
 One universal rule replaces the previous hardcoded special case, fixing newlines, tabs, and all other byte-encoded characters.
 
+### FP16 sampler bug fix
+
+**Problem**: FP16 inference (`--backend cuda --quantize int8 --fp16`) produced garbled/nonsense output, while INT8 FP32 and plain FP32 worked fine.
+
+**Root cause**: In `SamplerCUDA::sample()`, the sampler passed `fp16=1` to the GPU sampling kernel based on `backend.is_fp16()`. This told `cuda_sample` to interpret the logits buffer as FP16 (`half*`). But `transformer_forward` already converts FP16 logits to FP32 before returning them as `std::vector<float>`, so the logits uploaded to GPU were always FP32. The sampling kernel was reading FP32 data as FP16 — every pair of bytes was misinterpreted as a half-precision float, producing completely wrong token IDs.
+
+**Fix**: Always use `fp16=0` in `cuda_sample` since logits are guaranteed FP32 by the time they reach the sampler.
+
 ## Known Issues
 
 ### Performance

@@ -26,8 +26,8 @@ int SamplerCUDA::sample(const std::vector<float>& logits, int step)
     }
     cuda_memcpy_h2d(d_logits_, logits.data(), bytes);
 
-    int fp16 = backend_.is_fp16() ? 1 : 0;
-    return cuda_sample(d_logits_, logits.size(), temperature_, top_p_, seed_, step, fp16);
+    // Logits are always FP32 (converted in transformer_forward before download)
+    return cuda_sample(d_logits_, logits.size(), temperature_, top_p_, seed_, step, /*fp16=*/0);
 }
 
 }  // namespace vvllm
