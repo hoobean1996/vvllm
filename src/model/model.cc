@@ -18,7 +18,7 @@ AnyModel create_model(const ModelConfig& config, Backend& backend)
     throw std::runtime_error("Unsupported model type: " + config.model_type);
 }
 
-void load_weights(AnyModel& model, const std::unordered_map<std::string, Tensor<float>>& weights,
+void load_weights(AnyModel& model, const std::unordered_map<std::string, Tensor>& weights,
                   bool quantize)
 {
     std::visit([&](auto& m) { m.load_weights(weights, quantize); }, model);

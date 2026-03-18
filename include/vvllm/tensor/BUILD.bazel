@@ -4,5 +4,4 @@ cc_library(
     name = "tensor",
     hdrs = ["tensor.h"],
     strip_include_prefix = "//include",
-    deps = ["//include/vvllm/backend"],
 )

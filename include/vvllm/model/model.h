@@ -22,7 +22,7 @@ using AnyModel = std::variant<Qwen2Model, LlamaModel>;
 AnyModel create_model(const ModelConfig& config, Backend& backend);
 
 /// Load weights into a model.
-void load_weights(AnyModel& model, const std::unordered_map<std::string, Tensor<float>>& weights,
+void load_weights(AnyModel& model, const std::unordered_map<std::string, Tensor>& weights,
                   bool quantize = false);
 
 /// Run forward pass: token_ids -> logits for the last token.

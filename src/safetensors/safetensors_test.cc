@@ -6,7 +6,6 @@
 
 #include "gtest/gtest.h"
 #include "nlohmann/json.hpp"
-#include "src/backend/backend_naive.h"
 #include "vvllm/safetensors/safetensors.h"
 
 namespace vvllm
@@ -143,8 +142,7 @@ TEST(SafeTensorsLoaderTest, LoadTensorF32)
     SafeTensorsLoader loader(path);
     loader.parse();
 
-    BackendCPU backend;
-    auto tensor = loader.load_tensor("weight", backend);
+    auto tensor = loader.load_tensor("weight");
 
     ASSERT_EQ(tensor.shape().size(), 2);
     EXPECT_EQ(tensor.shape()[0], 2);
@@ -153,7 +151,7 @@ TEST(SafeTensorsLoaderTest, LoadTensorF32)
 
     for (size_t i = 0; i < 6; i++)
     {
-        EXPECT_FLOAT_EQ(tensor.data()[i], values[i]) << "mismatch at index " << i;
+        EXPECT_FLOAT_EQ(tensor.data<float>()[i], values[i]) << "mismatch at index " << i;
     }
 
     std::remove(path.c_str());
@@ -177,13 +175,12 @@ TEST(SafeTensorsLoaderTest, LoadTensorBF16)
     SafeTensorsLoader loader(path);
     loader.parse();
 
-    BackendCPU backend;
-    auto tensor = loader.load_tensor("weight", backend);
+    auto tensor = loader.load_tensor("weight");
 
     ASSERT_EQ(tensor.size(), 3);
     for (size_t i = 0; i < 3; i++)
     {
-        EXPECT_FLOAT_EQ(tensor.data()[i], expected[i]) << "mismatch at index " << i;
+        EXPECT_FLOAT_EQ(tensor.data<float>()[i], expected[i]) << "mismatch at index " << i;
     }
 
     std::remove(path.c_str());
@@ -201,8 +198,7 @@ TEST(SafeTensorsLoaderTest, LoadTensorUnsupportedDtypeThrows)
     SafeTensorsLoader loader(path);
     loader.parse();
 
-    BackendCPU backend;
-    EXPECT_THROW(loader.load_tensor("weight", backend), std::runtime_error);
+    EXPECT_THROW(loader.load_tensor("weight"), std::runtime_error);
 
     std::remove(path.c_str());
 }
@@ -219,8 +215,7 @@ TEST(SafeTensorsLoaderTest, LoadTensorNotFoundThrows)
     SafeTensorsLoader loader(path);
     loader.parse();
 
-    BackendCPU backend;
-    EXPECT_THROW(loader.load_tensor("nonexistent", backend), std::out_of_range);
+    EXPECT_THROW(loader.load_tensor("nonexistent"), std::out_of_range);
 
     std::remove(path.c_str());
 }
@@ -246,21 +241,20 @@ TEST(SafeTensorsLoaderTest, LoadAll)
     SafeTensorsLoader loader(path);
     loader.parse();
 
-    BackendCPU backend;
-    auto tensors = loader.load_all(backend);
+    auto tensors = loader.load_all();
 
     ASSERT_EQ(tensors.size(), 2);
 
     ASSERT_TRUE(tensors.count("tensor_a"));
     auto& a = tensors.at("tensor_a");
     EXPECT_EQ(a.size(), 2);
-    EXPECT_FLOAT_EQ(a.data()[0], 1.0f);
-    EXPECT_FLOAT_EQ(a.data()[1], 2.0f);
+    EXPECT_FLOAT_EQ(a.data<float>()[0], 1.0f);
+    EXPECT_FLOAT_EQ(a.data<float>()[1], 2.0f);
 
     ASSERT_TRUE(tensors.count("tensor_b"));
     auto& b = tensors.at("tensor_b");
     EXPECT_EQ(b.size(), 1);
-    EXPECT_FLOAT_EQ(b.data()[0], 3.0f);
+    EXPECT_FLOAT_EQ(b.data<float>()[0], 3.0f);
 
     std::remove(path.c_str());
 }

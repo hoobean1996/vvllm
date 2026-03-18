@@ -14,7 +14,6 @@ cc_test(
     srcs = ["safetensors_test.cc"],
     deps = [
         ":safetensors",
-        "//src/backend",
         "@googletest//:gtest_main",
         "@nlohmann_json//:json",
     ],

@@ -14,11 +14,11 @@ Qwen2Model::Qwen2Model(const ModelConfig& config, Backend& backend)
 {
 }
 
-void Qwen2Model::load_weights(const std::unordered_map<std::string, Tensor<float>>& weights,
+void Qwen2Model::load_weights(const std::unordered_map<std::string, Tensor>& weights,
                               bool quantize)
 {
-    embed_tokens_ = weights.at("model.embed_tokens.weight").data();
-    final_norm_weight_ = weights.at("model.norm.weight").data();
+    embed_tokens_ = weights.at("model.embed_tokens.weight").data<float>();
+    final_norm_weight_ = weights.at("model.norm.weight").data<float>();
 
     const std::size_t head_dim = config_.hidden_size / config_.num_attention_heads;
     const std::size_t kv_dim = config_.num_key_value_heads * head_dim;
@@ -42,32 +42,32 @@ void Qwen2Model::load_weights(const std::unordered_map<std::string, Tensor<float
         std::string prefix = "model.layers." + std::to_string(i) + ".";
         auto& layer = layers_[i];
 
-        layer.input_layernorm_weight = weights.at(prefix + "input_layernorm.weight").data();
+        layer.input_layernorm_weight = weights.at(prefix + "input_layernorm.weight").data<float>();
         layer.post_attention_layernorm_weight =
-            weights.at(prefix + "post_attention_layernorm.weight").data();
+            weights.at(prefix + "post_attention_layernorm.weight").data<float>();
 
         auto& attn = layer.attention;
         set_weight(attn.q_proj_weight,
-                   weights.at(prefix + "self_attn.q_proj.weight").data(),
+                   weights.at(prefix + "self_attn.q_proj.weight").data<float>(),
                    config_.num_attention_heads * head_dim, config_.hidden_size);
-        attn.q_proj_bias = weights.at(prefix + "self_attn.q_proj.bias").data();
+        attn.q_proj_bias = weights.at(prefix + "self_attn.q_proj.bias").data<float>();
         set_weight(attn.k_proj_weight,
-                   weights.at(prefix + "self_attn.k_proj.weight").data(),
+                   weights.at(prefix + "self_attn.k_proj.weight").data<float>(),
                    kv_dim, config_.hidden_size);
-        attn.k_proj_bias = weights.at(prefix + "self_attn.k_proj.bias").data();
+        attn.k_proj_bias = weights.at(prefix + "self_attn.k_proj.bias").data<float>();
         set_weight(attn.v_proj_weight,
-                   weights.at(prefix + "self_attn.v_proj.weight").data(),
+                   weights.at(prefix + "self_attn.v_proj.weight").data<float>(),
                    kv_dim, config_.hidden_size);
-        attn.v_proj_bias = weights.at(prefix + "self_attn.v_proj.bias").data();
+        attn.v_proj_bias = weights.at(prefix + "self_attn.v_proj.bias").data<float>();
         set_weight(attn.o_proj_weight,
-                   weights.at(prefix + "self_attn.o_proj.weight").data(),
+                   weights.at(prefix + "self_attn.o_proj.weight").data<float>(),
                    config_.hidden_size, config_.hidden_size);
 
         auto& mlp = layer.mlp;
 
         // Concatenate gate_proj and up_proj into a single [2*intermediate, hidden] weight
-        const float* gate_fp32 = weights.at(prefix + "mlp.gate_proj.weight").data();
-        const float* up_fp32 = weights.at(prefix + "mlp.up_proj.weight").data();
+        const float* gate_fp32 = weights.at(prefix + "mlp.gate_proj.weight").data<float>();
+        const float* up_fp32 = weights.at(prefix + "mlp.up_proj.weight").data<float>();
         std::size_t gate_up_size = 2 * config_.intermediate_size * config_.hidden_size;
         fused_weights_.emplace_back(gate_up_size);
         auto& gate_up = fused_weights_.back();
@@ -78,7 +78,7 @@ void Qwen2Model::load_weights(const std::unordered_map<std::string, Tensor<float
                    2 * config_.intermediate_size, config_.hidden_size);
 
         set_weight(mlp.down_proj_weight,
-                   weights.at(prefix + "mlp.down_proj.weight").data(),
+                   weights.at(prefix + "mlp.down_proj.weight").data<float>(),
                    config_.hidden_size, config_.intermediate_size);
     }
 }

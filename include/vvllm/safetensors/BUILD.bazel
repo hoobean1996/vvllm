@@ -5,7 +5,6 @@ cc_library(
     hdrs = ["safetensors.h"],
     strip_include_prefix = "//include",
     deps = [
-        "//include/vvllm/backend",
         "//include/vvllm/tensor",
     ],
 )

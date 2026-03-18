@@ -79,7 +79,7 @@ int main(int argc, char* argv[])
     std::cout << "Loading weights..." << std::endl;
     vvllm::SafeTensorsLoader loader(weights_path);
     loader.parse();
-    auto weights = loader.load_all(backend);
+    auto weights = loader.load_all();
     std::cout << "Loaded " << weights.size() << " tensors" << std::endl;
 
     // Parse quantization flag

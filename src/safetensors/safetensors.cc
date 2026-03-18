@@ -37,10 +37,6 @@ SafeTensorsLoader::~SafeTensorsLoader()
     }
 }
 
-/// SafeTensor Format
-/// 8 bytes header_size
-/// JSON header
-/// raw tensor data
 void SafeTensorsLoader::parse()
 {
     fd_ = open(filepath_.c_str(), O_RDONLY);
@@ -52,11 +48,7 @@ void SafeTensorsLoader::parse()
     fstat(fd_, &st);
     file_size_ = st.st_size;
 
-    mapped_ = mmap(nullptr,  // address decided by OS
-                   file_size_,
-                   PROT_READ,    // read_only
-                   MAP_PRIVATE,  // private mapping
-                   fd_, 0);
+    mapped_ = mmap(nullptr, file_size_, PROT_READ, MAP_PRIVATE, fd_, 0);
     if (mapped_ == MAP_FAILED)
     {
         close(fd_);
@@ -73,10 +65,7 @@ void SafeTensorsLoader::parse()
 
     for (auto& [name, value] : json.items())
     {
-        if (name == "__metadata__")
-        {
-            continue;
-        }
+        if (name == "__metadata__") continue;
         TensorInfo info;
         info.name = name;
         info.dtype = value["dtype"].get<std::string>();
@@ -97,30 +86,29 @@ const std::unordered_map<std::string, TensorInfo>& SafeTensorsLoader::tensor_inf
     return tensor_infos_;
 }
 
-Tensor<float> SafeTensorsLoader::load_tensor(const std::string& name, Backend& backend)
+Tensor SafeTensorsLoader::load_tensor(const std::string& name)
 {
     if (!parsed_)
     {
         throw std::runtime_error("must call parse() before load_tensor()");
     }
-    // [] operator is non-const, it would automatically insert when the name is not existed.
-    // update to .at
     auto& info = tensor_infos_.at(name);
 
     const uint8_t* tensor_bytes = data_start_ + info.offset_begin;
     size_t num_bytes = info.offset_end - info.offset_begin;
 
-    Tensor<float> tensor(backend, info.shape);
+    Tensor tensor(info.shape, DType::Float32, Device::CPU);
     if (info.dtype == "F32")
     {
-        std::memcpy(tensor.data(), tensor_bytes, num_bytes);
+        std::memcpy(tensor.data<float>(), tensor_bytes, num_bytes);
     }
     else if (info.dtype == "BF16")
     {
         auto* src = reinterpret_cast<const uint16_t*>(tensor_bytes);
+        float* dst = tensor.data<float>();
         for (size_t i = 0; i < tensor.size(); i++)
         {
-            tensor.data()[i] = bf16_to_f32(src[i]);
+            dst[i] = bf16_to_f32(src[i]);
         }
     }
     else
@@ -130,16 +118,16 @@ Tensor<float> SafeTensorsLoader::load_tensor(const std::string& name, Backend& b
     return tensor;
 }
 
-std::unordered_map<std::string, Tensor<float>> SafeTensorsLoader::load_all(Backend& backend)
+std::unordered_map<std::string, Tensor> SafeTensorsLoader::load_all()
 {
     if (!parsed_)
     {
         throw std::runtime_error("must call parse before call load_all");
     }
-    std::unordered_map<std::string, Tensor<float>> tensors;
+    std::unordered_map<std::string, Tensor> tensors;
     for (auto& [name, info] : tensor_infos_)
     {
-        tensors.emplace(name, load_tensor(name, backend));
+        tensors.emplace(name, load_tensor(name));
     }
     return tensors;
 }

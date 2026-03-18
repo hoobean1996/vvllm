@@ -31,7 +31,7 @@ class LlamaModel
 public:
     LlamaModel(const ModelConfig& config, Backend& backend);
 
-    void load_weights(const std::unordered_map<std::string, Tensor<float>>& weights,
+    void load_weights(const std::unordered_map<std::string, Tensor>& weights,
                       bool quantize = false);
     std::vector<float> forward(const std::vector<int>& token_ids, std::size_t pos,
                                KVCache& kv_cache);

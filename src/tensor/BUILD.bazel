@@ -1,7 +1,12 @@
 cc_library(
     name = "tensor",
     srcs = ["tensor.cc"],
-    deps = ["//include/vvllm/tensor"],
+    deps = [
+        "//include/vvllm/tensor",
+        "//src/backend:cuda_kernels",
+        "//third_party/cuda:cublas",
+        "//third_party/cuda:cuda_runtime",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -10,7 +15,6 @@ cc_test(
     srcs = ["tensor_test.cc"],
     deps = [
         ":tensor",
-        "//src/backend",
         "@googletest//:gtest_main",
     ],
 )

@@ -6,7 +6,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "vvllm/backend/backend.h"
 #include "vvllm/tensor/tensor.h"
 
 namespace vvllm
@@ -36,11 +35,11 @@ public:
     /// Get metadata for all tensors found in the file.
     const std::unordered_map<std::string, TensorInfo>& tensor_infos() const;
 
-    /// Load a single tensor by name, converting to float.
-    Tensor<float> load_tensor(const std::string& name, Backend& backend);
+    /// Load a single tensor by name, converting to float on CPU.
+    Tensor load_tensor(const std::string& name);
 
-    /// Load all tensors, converting to float.
-    std::unordered_map<std::string, Tensor<float>> load_all(Backend& backend);
+    /// Load all tensors, converting to float on CPU.
+    std::unordered_map<std::string, Tensor> load_all();
 
 private:
     std::string filepath_;
