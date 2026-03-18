@@ -423,9 +423,12 @@ __global__ void matmul_kernel(float* out, const float* A, const float* B, size_t
 }
 
 // ============================================================
-// Causal attention: per-head attention with softmax
+// Flash Attention: tiled online softmax, O(1) shared memory
 // Grid: (num_heads), Block: 256
+// Tile KV in blocks of FLASH_BLOCK_KV — scores never materialize fully.
 // ============================================================
+
+#define FLASH_BLOCK_KV 128
 
 __global__ void causal_attention_kernel(float* out, const float* q, size_t q_idx, const float* k,
                                         const float* v, size_t attend_len, size_t num_heads,
@@ -434,10 +437,10 @@ __global__ void causal_attention_kernel(float* out, const float* q, size_t q_idx
     size_t h = blockIdx.x;
     if (h >= num_heads) return;
 
+    // smem layout: scores[FLASH_BLOCK_KV] + reduce_buf[blockDim.x]
     extern __shared__ float sdata[];
-    // sdata layout: [0..attend_len) = scores, [attend_len..attend_len+blockDim.x) = reduction
     float* scores = sdata;
-    float* reduce_buf = sdata + attend_len;
+    float* reduce_buf = sdata + FLASH_BLOCK_KV;
 
     size_t tid = threadIdx.x;
     size_t stride = blockDim.x;
@@ -446,79 +449,91 @@ __global__ void causal_attention_kernel(float* out, const float* q, size_t q_idx
 
     const float* q_head = q + q_idx * num_heads * head_dim + h * head_dim;
 
-    // Compute QK^T scores
-    for (size_t t = tid; t < attend_len; t += stride)
-    {
-        const float* k_head = k + t * num_kv_heads * head_dim + kv_h * head_dim;
-        float dot = 0.0f;
-        for (size_t d = 0; d < head_dim; d++)
-        {
-            dot += q_head[d] * k_head[d];
-        }
-        scores[t] = dot * scale;
-    }
-    __syncthreads();
+    // Per-thread running accumulators (registers)
+    float running_max = -1e30f;
+    float running_sum = 0.0f;
+    // Each thread accumulates for dims d = tid, tid+stride, ...
+    // MAX_HD covers head_dim up to MAX_HD * blockDim.x
+    const int MAX_HD = 4;
+    float out_acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
-    // Softmax pass 1: find max
-    float local_max = -1e30f;
-    for (size_t t = tid; t < attend_len; t += stride)
-    {
-        if (scores[t] > local_max) local_max = scores[t];
-    }
-    reduce_buf[tid] = local_max;
-    __syncthreads();
+    const size_t kv_stride = num_kv_heads * head_dim;
 
-    for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+    for (size_t tile_start = 0; tile_start < attend_len; tile_start += FLASH_BLOCK_KV)
     {
-        if (tid < s)
+        size_t tile_len = attend_len - tile_start;
+        if (tile_len > FLASH_BLOCK_KV) tile_len = FLASH_BLOCK_KV;
+
+        // Phase 1: QK^T for this tile → scores[0..tile_len)
+        for (size_t t = tid; t < tile_len; t += stride)
         {
-            reduce_buf[tid] = fmaxf(reduce_buf[tid], reduce_buf[tid + s]);
+            const float* k_head = k + (tile_start + t) * kv_stride + kv_h * head_dim;
+            float dot = 0.0f;
+            for (size_t d = 0; d < head_dim; d++)
+                dot += q_head[d] * k_head[d];
+            scores[t] = dot * scale;
         }
         __syncthreads();
-    }
-    float max_val = reduce_buf[0];
-    __syncthreads();
 
-    // Softmax pass 2: exp and sum
-    float local_sum = 0.0f;
-    for (size_t t = tid; t < attend_len; t += stride)
-    {
-        float e = expf(scores[t] - max_val);
-        scores[t] = e;
-        local_sum += e;
-    }
-    reduce_buf[tid] = local_sum;
-    __syncthreads();
-
-    for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
-    {
-        if (tid < s)
+        // Phase 2: tile max (reduction)
+        float local_max = -1e30f;
+        for (size_t t = tid; t < tile_len; t += stride)
+            local_max = fmaxf(local_max, scores[t]);
+        reduce_buf[tid] = local_max;
+        __syncthreads();
+        for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
         {
-            reduce_buf[tid] += reduce_buf[tid + s];
+            if (tid < s) reduce_buf[tid] = fmaxf(reduce_buf[tid], reduce_buf[tid + s]);
+            __syncthreads();
+        }
+        float tile_max = reduce_buf[0];
+        __syncthreads();
+
+        // Phase 3: online softmax correction
+        float new_max = fmaxf(running_max, tile_max);
+        float correction = expf(running_max - new_max);
+        running_sum *= correction;
+        for (int i = 0; i < MAX_HD; i++)
+            out_acc[i] *= correction;
+
+        // Phase 4: exp scores, tile sum, and update running_sum
+        float local_tile_sum = 0.0f;
+        for (size_t t = tid; t < tile_len; t += stride)
+        {
+            float e = expf(scores[t] - new_max);
+            scores[t] = e;
+            local_tile_sum += e;
+        }
+        reduce_buf[tid] = local_tile_sum;
+        __syncthreads();
+        for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+        {
+            if (tid < s) reduce_buf[tid] += reduce_buf[tid + s];
+            __syncthreads();
+        }
+        running_sum += reduce_buf[0];
+        __syncthreads();
+
+        // Phase 5: accumulate weighted V for this tile
+        int reg_idx = 0;
+        for (size_t d = tid; d < head_dim; d += stride, reg_idx++)
+        {
+            float val = 0.0f;
+            for (size_t t = 0; t < tile_len; t++)
+                val += scores[t] * v[(tile_start + t) * kv_stride + kv_h * head_dim + d];
+            out_acc[reg_idx] += val;
         }
         __syncthreads();
-    }
-    float sum = reduce_buf[0];
-    __syncthreads();
 
-    // Softmax pass 3: normalize
-    for (size_t t = tid; t < attend_len; t += stride)
-    {
-        scores[t] /= sum;
+        running_max = new_max;
     }
-    __syncthreads();
 
-    // Weighted V sum: each thread handles a subset of head_dim
+    // Final normalization and write output
+    float inv_sum = (running_sum > 0.0f) ? 1.0f / running_sum : 0.0f;
     float* head_out = out + h * head_dim;
-    for (size_t d = tid; d < head_dim; d += stride)
-    {
-        float val = 0.0f;
-        for (size_t t = 0; t < attend_len; t++)
-        {
-            val += scores[t] * v[t * num_kv_heads * head_dim + kv_h * head_dim + d];
-        }
-        head_out[d] = val;
-    }
+    int reg_idx = 0;
+    for (size_t d = tid; d < head_dim; d += stride, reg_idx++)
+        head_out[d] = out_acc[reg_idx] * inv_sum;
 }
 
 // ============================================================
@@ -687,8 +702,8 @@ extern "C" void cuda_causal_attention(float* out, const float* q, size_t q_idx, 
                                       size_t num_kv_heads, size_t head_dim, float scale)
 {
     size_t block = 256;
-    // Shared memory: scores[attend_len] + reduce_buf[block]
-    size_t smem = (attend_len + block) * sizeof(float);
+    // Flash Attention: constant smem = scores[FLASH_BLOCK_KV] + reduce_buf[block]
+    size_t smem = (FLASH_BLOCK_KV + block) * sizeof(float);
     causal_attention_kernel<<<num_heads, block, smem>>>(out, q, q_idx, k, v, attend_len, num_heads,
                                                         num_kv_heads, head_dim, scale);
 }
@@ -988,7 +1003,7 @@ __global__ void causal_attention_fp16_kernel(half* out, const half* q, size_t q_
 
     extern __shared__ float sdata[];
     float* scores = sdata;
-    float* reduce_buf = sdata + attend_len;
+    float* reduce_buf = sdata + FLASH_BLOCK_KV;
 
     size_t tid = threadIdx.x;
     size_t stride = blockDim.x;
@@ -997,60 +1012,88 @@ __global__ void causal_attention_fp16_kernel(half* out, const half* q, size_t q_
 
     const half* q_head = q + q_idx * num_heads * head_dim + h * head_dim;
 
-    // QK^T scores (accumulate in FP32)
-    for (size_t t = tid; t < attend_len; t += stride)
-    {
-        const half* k_head = k + t * num_kv_heads * head_dim + kv_h * head_dim;
-        float dot = 0.0f;
-        for (size_t d = 0; d < head_dim; d++)
-            dot += __half2float(q_head[d]) * __half2float(k_head[d]);
-        scores[t] = dot * scale;
-    }
-    __syncthreads();
+    float running_max = -1e30f;
+    float running_sum = 0.0f;
+    const int MAX_HD = 4;
+    float out_acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
-    // Softmax
-    float local_max = -1e30f;
-    for (size_t t = tid; t < attend_len; t += stride)
-        if (scores[t] > local_max) local_max = scores[t];
-    reduce_buf[tid] = local_max;
-    __syncthreads();
-    for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+    const size_t kv_stride = num_kv_heads * head_dim;
+
+    for (size_t tile_start = 0; tile_start < attend_len; tile_start += FLASH_BLOCK_KV)
     {
-        if (tid < s) reduce_buf[tid] = fmaxf(reduce_buf[tid], reduce_buf[tid + s]);
+        size_t tile_len = attend_len - tile_start;
+        if (tile_len > FLASH_BLOCK_KV) tile_len = FLASH_BLOCK_KV;
+
+        // Phase 1: QK^T (accumulate in FP32)
+        for (size_t t = tid; t < tile_len; t += stride)
+        {
+            const half* k_head = k + (tile_start + t) * kv_stride + kv_h * head_dim;
+            float dot = 0.0f;
+            for (size_t d = 0; d < head_dim; d++)
+                dot += __half2float(q_head[d]) * __half2float(k_head[d]);
+            scores[t] = dot * scale;
+        }
         __syncthreads();
-    }
-    float max_val = reduce_buf[0];
-    __syncthreads();
 
-    float local_sum = 0.0f;
-    for (size_t t = tid; t < attend_len; t += stride)
-    {
-        float e = expf(scores[t] - max_val);
-        scores[t] = e;
-        local_sum += e;
-    }
-    reduce_buf[tid] = local_sum;
-    __syncthreads();
-    for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
-    {
-        if (tid < s) reduce_buf[tid] += reduce_buf[tid + s];
+        // Phase 2: tile max
+        float local_max = -1e30f;
+        for (size_t t = tid; t < tile_len; t += stride)
+            local_max = fmaxf(local_max, scores[t]);
+        reduce_buf[tid] = local_max;
         __syncthreads();
-    }
-    float sum = reduce_buf[0];
-    __syncthreads();
-    for (size_t t = tid; t < attend_len; t += stride)
-        scores[t] /= sum;
-    __syncthreads();
+        for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+        {
+            if (tid < s) reduce_buf[tid] = fmaxf(reduce_buf[tid], reduce_buf[tid + s]);
+            __syncthreads();
+        }
+        float tile_max = reduce_buf[0];
+        __syncthreads();
 
-    // Weighted V sum → FP16 output
+        // Phase 3: online softmax correction
+        float new_max = fmaxf(running_max, tile_max);
+        float correction = expf(running_max - new_max);
+        running_sum *= correction;
+        for (int i = 0; i < MAX_HD; i++)
+            out_acc[i] *= correction;
+
+        // Phase 4: exp scores + tile sum
+        float local_tile_sum = 0.0f;
+        for (size_t t = tid; t < tile_len; t += stride)
+        {
+            float e = expf(scores[t] - new_max);
+            scores[t] = e;
+            local_tile_sum += e;
+        }
+        reduce_buf[tid] = local_tile_sum;
+        __syncthreads();
+        for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+        {
+            if (tid < s) reduce_buf[tid] += reduce_buf[tid + s];
+            __syncthreads();
+        }
+        running_sum += reduce_buf[0];
+        __syncthreads();
+
+        // Phase 5: accumulate weighted V
+        int reg_idx = 0;
+        for (size_t d = tid; d < head_dim; d += stride, reg_idx++)
+        {
+            float val = 0.0f;
+            for (size_t t = 0; t < tile_len; t++)
+                val += scores[t] * __half2float(v[(tile_start + t) * kv_stride + kv_h * head_dim + d]);
+            out_acc[reg_idx] += val;
+        }
+        __syncthreads();
+
+        running_max = new_max;
+    }
+
+    // Final normalization → FP16 output
+    float inv_sum = (running_sum > 0.0f) ? 1.0f / running_sum : 0.0f;
     half* head_out = out + h * head_dim;
-    for (size_t d = tid; d < head_dim; d += stride)
-    {
-        float val = 0.0f;
-        for (size_t t = 0; t < attend_len; t++)
-            val += scores[t] * __half2float(v[t * num_kv_heads * head_dim + kv_h * head_dim + d]);
-        head_out[d] = __float2half(val);
-    }
+    int reg_idx = 0;
+    for (size_t d = tid; d < head_dim; d += stride, reg_idx++)
+        head_out[d] = __float2half(out_acc[reg_idx] * inv_sum);
 }
 
 __global__ void add_bias_fp16_kernel(half* out, const half* bias, size_t M, size_t N)
@@ -1139,7 +1182,7 @@ extern "C" void cuda_causal_attention_fp16(void* out, const void* q, size_t q_id
                                             size_t num_kv_heads, size_t head_dim, float scale)
 {
     size_t block = 256;
-    size_t smem = (attend_len + block) * sizeof(float);
+    size_t smem = (FLASH_BLOCK_KV + block) * sizeof(float);
     causal_attention_fp16_kernel<<<num_heads, block, smem>>>(
         (half*)out, (const half*)q, q_idx, (const half*)k, (const half*)v, attend_len, num_heads,
         num_kv_heads, head_dim, scale);

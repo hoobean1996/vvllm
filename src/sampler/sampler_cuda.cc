@@ -5,8 +5,8 @@
 namespace vvllm
 {
 
-SamplerCUDA::SamplerCUDA(float temperature, float top_p, std::uint64_t seed, Backend& backend)
-    : temperature_(temperature), top_p_(top_p), seed_(seed), backend_(backend)
+SamplerCUDA::SamplerCUDA(float temperature, float top_p, std::uint64_t seed)
+    : temperature_(temperature), top_p_(top_p), seed_(seed)
 {
 }
 

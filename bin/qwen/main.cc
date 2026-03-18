@@ -128,8 +128,7 @@ int main(int argc, char* argv[])
     if (FLAGS_backend == "cuda")
     {
         sampler = std::make_unique<vvllm::SamplerCUDA>(
-            static_cast<float>(FLAGS_temperature), static_cast<float>(FLAGS_top_p), FLAGS_seed,
-            backend);
+            static_cast<float>(FLAGS_temperature), static_cast<float>(FLAGS_top_p), FLAGS_seed);
         kv_cache = std::make_unique<vvllm::KVCacheCUDA>(FLAGS_fp16);
     }
     else

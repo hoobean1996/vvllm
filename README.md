@@ -81,6 +81,7 @@ models/                 # Model weights (not checked in)
 - [x] sgemv dispatch for M=1 decode (eliminates sgemm packing overhead, +42% decode throughput)
 - [x] CUDA backend with GPU mirror system, GPU-resident KV cache, and fused operators (4.5x decode speedup over BLAS on Qwen2.5-0.5B)
 - [x] FP16 inference — all GPU ops use half precision with FP32 accumulation for stability (+29% decode throughput)
+- [x] Flash Attention — tiled online softmax, O(1) shared memory per head regardless of sequence length
 
 ## Benchmarks
 
@@ -176,6 +177,27 @@ Optimization progression on Qwen2.5-0.5B decode:
 - Fused `silu_mul` — `silu(gate) * up` in a single kernel instead of separate `silu` + `mul`
 - Fused `linear_add` — matmul + residual add in one kernel, eliminating temporary buffers for `proj_out` and `mlp_out`
 
+**Flash Attention**: Replaced the naive attention kernel (which materialized the full `scores[attend_len]` array in shared memory) with a tiled online softmax implementation. The old kernel needed `(attend_len + 256) × 4` bytes of shared memory per head — growing linearly with sequence length and hitting the 48KB limit at ~12K tokens. The new kernel tiles KV in blocks of 128, maintaining only `running_max` and `running_sum` scalars to incrementally correct the softmax across tiles. Shared memory is constant at 1.5KB per head regardless of sequence length.
+
+| attend_len | Old kernel smem/head | Flash Attention smem/head |
+|------------|---------------------|--------------------------|
+| 54 (short) | 1.2 KB | **1.5 KB** |
+| 448 | 2.8 KB | **1.5 KB** |
+| 751 | 3.9 KB | **1.5 KB** |
+| 4096 | 17.0 KB | **1.5 KB** |
+| 12288 | 49.0 KB (OOM) | **1.5 KB** |
+
+Decode throughput remains stable across sequence lengths:
+
+| Prompt | Decode range | Throughput | Avg latency |
+|--------|-------------|------------|-------------|
+| 4 tok | 4→54 | 159.0 tok/s | 6.3 ms |
+| 69 tok | 69→269 | 161.5 tok/s | 6.2 ms |
+| 148 tok | 148→448 | 161.4 tok/s | 6.2 ms |
+| 251 tok | 251→751 | 151.4 tok/s | 6.6 ms |
+
+*Measured on Qwen2.5-0.5B, RTX 4060, `--backend cuda --quantize int8 --fp16`.*
+
 ### KV cache impact
 
 `DecodeWithCache/64` at ~362us vs `DecodeNoCache/64` at ~20ms — **56x speedup**.
@@ -238,6 +260,7 @@ One universal rule replaces the previous hardcoded special case, fixing newlines
 5. **Multi-threading** — parallelize matmul and independent ops
 6. ~~**GPU backend**~~ — done, CUDA backend with GPU mirror system + GPU-resident KV cache + fused ops, 4.5x decode speedup
 7. ~~**FP16 inference**~~ — done, +29% decode throughput with half-precision GPU ops
+8. ~~**Flash Attention**~~ — done, tiled online softmax with O(1) shared memory, unlocks long context
 
 ## Build Requirements
 
