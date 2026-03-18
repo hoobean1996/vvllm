@@ -55,6 +55,7 @@ cc_import(
     name = "cuda_kernels",
     static_library = "libcuda_kernels.a",
     hdrs = ["cuda_kernels.h"],
+    visibility = ["//visibility:public"],
 )
 
 cc_library(

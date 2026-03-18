@@ -7,6 +7,7 @@
 #include "benchmark/benchmark.h"
 #include "src/backend/backend_blas.h"
 #include "src/backend/backend_naive.h"
+#include "src/kv_cache/kv_cache_cpu.h"
 #include "vvllm/config/config.h"
 #include "vvllm/model/llama/model.h"
 #include "vvllm/model/transformer.h"
@@ -155,20 +156,20 @@ void BM_KVCacheAppend(benchmark::State& state)
     for (auto _ : state)
     {
         state.PauseTiming();
-        vvllm::BackendCPU backend;
-        backend.kv_cache_init(num_layers, kv_dim);
+        vvllm::KVCacheCPU cache;
+        cache.init(num_layers, kv_dim);
         for (std::size_t l = 0; l < num_layers; l++)
         {
-            backend.kv_cache_append(l, prefill_k.data(), prefill_v.data(), cache_depth);
+            cache.append(l, prefill_k.data(), prefill_v.data(), cache_depth);
         }
-        backend.kv_cache_advance(cache_depth);
+        cache.advance(cache_depth);
         state.ResumeTiming();
 
         for (std::size_t l = 0; l < num_layers; l++)
         {
-            backend.kv_cache_append(l, new_k.data(), new_v.data(), 1);
+            cache.append(l, new_k.data(), new_v.data(), 1);
         }
-        benchmark::DoNotOptimize(backend.kv_cache_k(0));
+        benchmark::DoNotOptimize(cache.k(0));
     }
     state.SetItemsProcessed(state.iterations());
 }
@@ -290,12 +291,13 @@ void BM_Prefill(benchmark::State& state)
         t = t % static_cast<int>(TinyModel::kVocabSize);
     }
 
+    vvllm::KVCacheCPU cache;
+
     for (auto _ : state)
     {
-        backend.kv_cache_reset();
         auto logits = vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
                                                  model.final_norm_weight.data(), model.config,
-                                                 backend, token_ids, 0);
+                                                 backend, cache, token_ids, 0);
         benchmark::DoNotOptimize(logits.data());
     }
     state.SetItemsProcessed(state.iterations() * static_cast<long>(seq_len));
@@ -321,9 +323,10 @@ void BM_DecodeWithCache(benchmark::State& state)
         t = t % static_cast<int>(TinyModel::kVocabSize);
     }
 
+    vvllm::KVCacheCPU cache;
     vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
-                               model.final_norm_weight.data(), model.config, backend, prefill_ids,
-                               0);
+                               model.final_norm_weight.data(), model.config, backend, cache,
+                               prefill_ids, 0);
 
     // Decode a single token from the cached state
     std::vector<int> decode_id = {5};
@@ -331,10 +334,10 @@ void BM_DecodeWithCache(benchmark::State& state)
     for (auto _ : state)
     {
         // Rewind cache to prefill state
-        backend.kv_cache_truncate(context_len);
+        cache.truncate(context_len);
         auto logits = vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
                                                  model.final_norm_weight.data(), model.config,
-                                                 backend, decode_id, context_len);
+                                                 backend, cache, decode_id, context_len);
         benchmark::DoNotOptimize(logits.data());
     }
     state.SetItemsProcessed(state.iterations());
@@ -360,12 +363,14 @@ void BM_DecodeNoCache(benchmark::State& state)
         t = t % static_cast<int>(TinyModel::kVocabSize);
     }
 
+    vvllm::KVCacheCPU cache;
+
     for (auto _ : state)
     {
         // Fresh cache each time — full recompute (pos=0 triggers reset)
         auto logits = vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
                                                  model.final_norm_weight.data(), model.config,
-                                                 backend, token_ids, 0);
+                                                 backend, cache, token_ids, 0);
         benchmark::DoNotOptimize(logits.data());
     }
     state.SetItemsProcessed(state.iterations());

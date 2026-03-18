@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include <cuda_runtime.h>
+
 #include "src/backend/cuda_kernels.h"
 
 namespace vvllm
@@ -40,11 +42,6 @@ BackendCUDA::~BackendCUDA()
     if (d_tmp_fp16_in_) cuda_free(d_tmp_fp16_in_);
     for (int i = 0; i < 2; i++)
         if (d_tmp_aux_[i]) cuda_free(d_tmp_aux_[i]);
-    for (auto& kv : gpu_kv_)
-    {
-        if (kv.d_k) cuda_free(kv.d_k);
-        if (kv.d_v) cuda_free(kv.d_v);
-    }
 }
 
 void* BackendCUDA::allocate(std::size_t bytes) { return cuda_malloc_host(bytes); }
@@ -449,96 +446,6 @@ void BackendCUDA::matmul(float* out, const float* A, const float* B, std::size_t
 }
 
 // ============================================================
-// GPU-Resident KV Cache
-// ============================================================
-
-void BackendCUDA::kv_cache_init(std::size_t num_layers, std::size_t kv_dim)
-{
-    if (!gpu_kv_.empty()) return;  // idempotent
-    gpu_kv_.resize(num_layers);
-    gpu_kv_dim_ = kv_dim;
-    gpu_kv_seq_len_ = 0;
-
-    // Pre-allocate so kv_cache_k() returns non-null immediately
-    std::size_t init_cap = 128 * kv_dim;
-    std::size_t init_bytes = init_cap * sizeof(float);
-    for (auto& kv : gpu_kv_)
-    {
-        kv.d_k = cuda_malloc(init_bytes);
-        kv.d_v = cuda_malloc(init_bytes);
-        kv.capacity = init_cap;
-    }
-}
-
-void BackendCUDA::kv_cache_append(std::size_t layer, const float* k, const float* v,
-                                   std::size_t num_tokens)
-{
-    auto& kv = gpu_kv_[layer];
-    std::size_t new_seq_len = gpu_kv_seq_len_ + num_tokens;
-    std::size_t needed = new_seq_len * gpu_kv_dim_;
-
-    // Grow buffer if needed (2x growth factor)
-    if (needed > kv.capacity)
-    {
-        std::size_t new_cap = std::max(needed, kv.capacity * 2);
-        std::size_t new_bytes = new_cap * sizeof(float);
-        void* new_dk = cuda_malloc(new_bytes);
-        void* new_dv = cuda_malloc(new_bytes);
-        if (kv.d_k)
-        {
-            std::size_t old_bytes = gpu_kv_seq_len_ * gpu_kv_dim_ * sizeof(float);
-            cuda_memcpy_d2d(new_dk, kv.d_k, old_bytes);
-            cuda_memcpy_d2d(new_dv, kv.d_v, old_bytes);
-            cuda_free(kv.d_k);
-            cuda_free(kv.d_v);
-        }
-        kv.d_k = new_dk;
-        kv.d_v = new_dv;
-        kv.capacity = new_cap;
-    }
-
-    // Copy new tokens to the end of the GPU KV buffer via gpu_input (reads from mirror)
-    std::size_t token_bytes = num_tokens * gpu_kv_dim_ * sizeof(float);
-    std::size_t offset_bytes = gpu_kv_seq_len_ * gpu_kv_dim_ * sizeof(float);
-
-    void* d_k_src = gpu_input(k, token_bytes, d_tmp_in_, d_tmp_in_bytes_);
-    cuda_memcpy_d2d(static_cast<char*>(kv.d_k) + offset_bytes, d_k_src, token_bytes);
-
-    void* d_v_src = gpu_input(v, token_bytes, d_tmp_in2_, d_tmp_in2_bytes_);
-    cuda_memcpy_d2d(static_cast<char*>(kv.d_v) + offset_bytes, d_v_src, token_bytes);
-}
-
-const float* BackendCUDA::kv_cache_k(std::size_t layer) const
-{
-    if (layer >= gpu_kv_.size()) return nullptr;
-    return static_cast<const float*>(gpu_kv_[layer].d_k);
-}
-
-const float* BackendCUDA::kv_cache_v(std::size_t layer) const
-{
-    if (layer >= gpu_kv_.size()) return nullptr;
-    return static_cast<const float*>(gpu_kv_[layer].d_v);
-}
-
-void BackendCUDA::kv_cache_advance(std::size_t num_tokens)
-{
-    gpu_kv_seq_len_ += num_tokens;
-}
-
-void BackendCUDA::kv_cache_reset()
-{
-    gpu_kv_seq_len_ = 0;
-}
-
-void BackendCUDA::kv_cache_truncate(std::size_t new_seq_len)
-{
-    if (new_seq_len < gpu_kv_seq_len_)
-    {
-        gpu_kv_seq_len_ = new_seq_len;
-    }
-}
-
-// ============================================================
 // Causal Attention
 // ============================================================
 
@@ -553,22 +460,19 @@ void BackendCUDA::causal_attention(float* out, const float* q, std::size_t q_idx
     // q likely has a mirror
     float* d_q = static_cast<float*>(gpu_input(q, q_bytes, d_tmp_in_, d_tmp_in_bytes_));
 
-    // Check if k/v are already GPU-resident (from GPU KV cache)
+    // Detect if k/v are already GPU-resident (e.g. from KVCacheCUDA)
     float* d_k = nullptr;
     float* d_v = nullptr;
-    for (const auto& kv : gpu_kv_)
+    cudaPointerAttributes attrs;
+    if (cudaPointerGetAttributes(&attrs, k) == cudaSuccess &&
+        attrs.type == cudaMemoryTypeDevice)
     {
-        if (k == kv.d_k)
-        {
-            d_k = const_cast<float*>(k);
-            d_v = const_cast<float*>(v);
-            break;
-        }
+        d_k = const_cast<float*>(k);
+        d_v = const_cast<float*>(v);
     }
-
-    if (!d_k)
+    else
     {
-        // Fallback: upload from CPU (original path)
+        // Fallback: upload from CPU
         ensure_buf(d_tmp_aux_[0], d_tmp_aux_bytes_[0], kv_bytes);
         cuda_memcpy_h2d(d_tmp_aux_[0], k, kv_bytes);
         ensure_buf(d_tmp_aux_[1], d_tmp_aux_bytes_[1], kv_bytes);

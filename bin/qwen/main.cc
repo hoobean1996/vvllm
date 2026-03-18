@@ -7,6 +7,8 @@
 #include "src/backend/backend_blas.h"
 #include "src/backend/backend_cuda.h"
 #include "src/backend/backend_naive.h"
+#include "src/kv_cache/kv_cache_cpu.h"
+#include "src/kv_cache/kv_cache_cuda.h"
 #include "vvllm/config/config.h"
 #include "vvllm/model/model.h"
 #include "vvllm/safetensors/safetensors.h"
@@ -122,11 +124,22 @@ int main(int argc, char* argv[])
     vvllm::Sampler sampler(static_cast<float>(FLAGS_temperature), static_cast<float>(FLAGS_top_p),
                            FLAGS_seed);
 
+    // Create KV cache matching the backend
+    std::unique_ptr<vvllm::KVCache> kv_cache;
+    if (FLAGS_backend == "cuda")
+    {
+        kv_cache = std::make_unique<vvllm::KVCacheCUDA>();
+    }
+    else
+    {
+        kv_cache = std::make_unique<vvllm::KVCacheCPU>();
+    }
+
     vvllm::Stats stats;
 
     // Prefill: process the full prompt, populating the KV cache
     stats.begin_prefill();
-    auto logits = vvllm::forward(model, token_ids, 0);
+    auto logits = vvllm::forward(model, token_ids, 0, *kv_cache);
     stats.end_prefill(token_ids.size());
 
     // Decode: stream tokens one at a time
@@ -146,11 +159,11 @@ int main(int argc, char* argv[])
         if (FLAGS_kv_cache)
         {
             std::size_t pos = token_ids.size() - 1;
-            logits = vvllm::forward(model, {next_token}, pos);
+            logits = vvllm::forward(model, {next_token}, pos, *kv_cache);
         }
         else
         {
-            logits = vvllm::forward(model, token_ids, 0);
+            logits = vvllm::forward(model, token_ids, 0, *kv_cache);
         }
 
         stats.end_step();

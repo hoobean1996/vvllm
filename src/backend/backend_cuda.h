@@ -50,16 +50,6 @@ public:
     void begin_forward() override;
     void flush(const void* ptr, std::size_t bytes) override;
 
-    // GPU-resident KV cache
-    void kv_cache_init(std::size_t num_layers, std::size_t kv_dim) override;
-    void kv_cache_append(std::size_t layer, const float* k, const float* v,
-                         std::size_t num_tokens) override;
-    const float* kv_cache_k(std::size_t layer) const override;
-    const float* kv_cache_v(std::size_t layer) const override;
-    void kv_cache_advance(std::size_t num_tokens) override;
-    void kv_cache_reset() override;
-    void kv_cache_truncate(std::size_t new_seq_len) override;
-
 private:
     struct GpuBuf
     {
@@ -113,16 +103,6 @@ private:
     // keep CPU in sync (needed for prefill sub-buffer patterns).
     void finish_output(void* cpu_ptr, void* d_ptr, std::size_t bytes, bool reused);
 
-    // GPU-resident KV cache
-    struct GpuKVLayer
-    {
-        void* d_k = nullptr;
-        void* d_v = nullptr;
-        std::size_t capacity = 0;  // allocated floats per buffer (seq_len * kv_dim)
-    };
-    std::vector<GpuKVLayer> gpu_kv_;
-    std::size_t gpu_kv_seq_len_ = 0;
-    std::size_t gpu_kv_dim_ = 0;
 };
 
 }  // namespace vvllm

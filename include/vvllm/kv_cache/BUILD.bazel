@@ -1,0 +1,7 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "kv_cache",
+    hdrs = ["kv_cache.h"],
+    strip_include_prefix = "//include",
+)

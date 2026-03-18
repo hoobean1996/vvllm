@@ -27,6 +27,7 @@ cc_binary(
         "//include/vvllm/model/llama",
         "//src/backend",
         "//src/backend:backend_blas",
+        "//src/kv_cache:kv_cache_cpu",
         "//src/quantize",
         "@google_benchmark//:benchmark_main",
     ],

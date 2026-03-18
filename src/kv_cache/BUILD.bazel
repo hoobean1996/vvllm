@@ -1,0 +1,18 @@
+cc_library(
+    name = "kv_cache_cpu",
+    srcs = ["kv_cache_cpu.cc"],
+    hdrs = ["kv_cache_cpu.h"],
+    deps = ["//include/vvllm/kv_cache"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "kv_cache_cuda",
+    srcs = ["kv_cache_cuda.cc"],
+    hdrs = ["kv_cache_cuda.h"],
+    deps = [
+        "//include/vvllm/kv_cache",
+        "//src/backend:cuda_kernels",
+    ],
+    visibility = ["//visibility:public"],
+)

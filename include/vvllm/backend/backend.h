@@ -94,15 +94,6 @@ public:
     /// No-op for CPU backends. GPU backends download if the device copy is newer.
     virtual void flush(const void* /*ptr*/, std::size_t /*bytes*/) {}
 
-    /// KV cache interface — each backend owns its KV cache storage.
-    virtual void kv_cache_init(std::size_t /*num_layers*/, std::size_t /*kv_dim*/) {}
-    virtual void kv_cache_append(std::size_t /*layer*/, const float* /*k*/, const float* /*v*/,
-                                 std::size_t /*num_tokens*/) {}
-    virtual const float* kv_cache_k(std::size_t /*layer*/) const { return nullptr; }
-    virtual const float* kv_cache_v(std::size_t /*layer*/) const { return nullptr; }
-    virtual void kv_cache_advance(std::size_t /*num_tokens*/) {}
-    virtual void kv_cache_reset() {}
-    virtual void kv_cache_truncate(std::size_t /*new_seq_len*/) {}
 };
 
 std::unique_ptr<Backend> create_backend(BackendKind kind);
