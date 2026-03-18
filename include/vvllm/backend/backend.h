@@ -103,6 +103,12 @@ public:
     /// Whether this backend uses FP16 precision for GPU computation.
     virtual bool is_fp16() const { return false; }
 
+    /// Convert FP32 data to FP16 on device. No-op for CPU backends.
+    virtual void fp32_to_fp16(void* /*dst*/, const float* /*src*/, std::size_t /*n*/) {}
+
+    /// Convert FP16 data to FP32 on device. No-op for CPU backends.
+    virtual void fp16_to_fp32(float* /*dst*/, const void* /*src*/, std::size_t /*n*/) {}
+
     /// Which device this backend targets.
     virtual Device device() const { return Device::CPU; }
 };

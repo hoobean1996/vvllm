@@ -56,6 +56,19 @@ public:
     void* raw_data() { return data_; }
     const void* raw_data() const { return data_; }
 
+    /// Get pointer at element offset (handles dtype-aware byte arithmetic).
+    /// Returns as float* for compatibility with Backend ops that take float*.
+    float* at(std::size_t element_offset)
+    {
+        return reinterpret_cast<float*>(static_cast<char*>(data_) +
+                                        element_offset * dtype_size(dtype_));
+    }
+    const float* at(std::size_t element_offset) const
+    {
+        return reinterpret_cast<const float*>(static_cast<const char*>(data_) +
+                                              element_offset * dtype_size(dtype_));
+    }
+
     const std::vector<std::size_t>& shape() const { return shape_; }
     std::size_t size() const { return size_; }
     std::size_t bytes() const { return size_ * dtype_size(dtype_); }

@@ -50,6 +50,8 @@ public:
                           std::size_t num_kv_heads, std::size_t head_dim, float scale) override;
     bool is_fp16() const override;
     Device device() const override;
+    void fp32_to_fp16(void* dst, const float* src, std::size_t n) override;
+    void fp16_to_fp32(float* dst, const void* src, std::size_t n) override;
 
 private:
     struct GpuBuf
