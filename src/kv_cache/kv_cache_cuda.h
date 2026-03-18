@@ -11,6 +11,7 @@ namespace vvllm
 class KVCacheCUDA : public KVCache
 {
 public:
+    explicit KVCacheCUDA(bool fp16 = false);
     ~KVCacheCUDA() override;
 
     void init(std::size_t num_layers, std::size_t kv_dim) override;
@@ -29,6 +30,7 @@ private:
         std::size_t capacity = 0;
     };
     std::vector<GpuKVLayer> layers_;
+    bool fp16_;
 };
 
 }  // namespace vvllm

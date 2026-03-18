@@ -25,6 +25,7 @@ DEFINE_uint64(seed, 42, "Random seed for sampling");
 DEFINE_bool(kv_cache, true, "Enable KV cache (disable to recompute full sequence each step)");
 DEFINE_string(backend, "cpu", "Backend to use: cpu, blas, cuda");
 DEFINE_string(quantize, "", "Weight quantization: int8 (empty for none)");
+DEFINE_bool(fp16, false, "Use FP16 inference (CUDA only)");
 
 int main(int argc, char* argv[])
 {
@@ -54,7 +55,7 @@ int main(int argc, char* argv[])
     std::unique_ptr<vvllm::Backend> backend_ptr;
     if (FLAGS_backend == "cuda")
     {
-        backend_ptr = std::make_unique<vvllm::BackendCUDA>();
+        backend_ptr = std::make_unique<vvllm::BackendCUDA>(FLAGS_fp16);
     }
     else if (FLAGS_backend == "blas")
     {
@@ -128,7 +129,7 @@ int main(int argc, char* argv[])
     std::unique_ptr<vvllm::KVCache> kv_cache;
     if (FLAGS_backend == "cuda")
     {
-        kv_cache = std::make_unique<vvllm::KVCacheCUDA>();
+        kv_cache = std::make_unique<vvllm::KVCacheCUDA>(FLAGS_fp16);
     }
     else
     {

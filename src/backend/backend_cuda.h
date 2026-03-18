@@ -15,8 +15,10 @@ namespace vvllm
 class BackendCUDA : public BackendCPU
 {
 public:
-    BackendCUDA();
+    explicit BackendCUDA(bool fp16 = false);
     ~BackendCUDA() override;
+
+    bool fp16() const { return fp16_; }
 
     void* allocate(std::size_t bytes) override;
     void deallocate(void* ptr) override;
@@ -104,6 +106,17 @@ private:
     // keep CPU in sync (needed for prefill sub-buffer patterns).
     void finish_output(void* cpu_ptr, void* d_ptr, std::size_t bytes, bool reused);
 
+    // FP16 mirror helpers — mirror stores half, CPU buffer is float
+    // fp32_bytes = element_count * sizeof(float), mirror uses fp32_bytes / 2
+    void* gpu_input_fp16(const void* cpu_ptr, std::size_t fp32_bytes, void*& fallback,
+                         std::size_t& fallback_cap);
+    void* gpu_output_fp16(const void* cpu_ptr, std::size_t fp32_bytes, bool& reused);
+    void finish_output_fp16(void* cpu_ptr, void* d_ptr, std::size_t fp32_bytes, bool reused);
+
+    // Cache FP32 weight as FP16 on GPU
+    void* cache_weight_as_fp16(const void* host_ptr, std::size_t fp32_bytes);
+
+    bool fp16_;
 };
 
 }  // namespace vvllm

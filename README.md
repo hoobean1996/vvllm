@@ -2,7 +2,7 @@
 
 A minimal LLM inference engine built from scratch in C++20. No frameworks, no libraries for the core — just raw C++ to understand how LLM inference actually works.
 
-Currently runs Qwen2.5-0.5B and SmolLM-135M. Supports OpenBLAS for accelerated linear projections, batched GQA attention, INT8 per-channel weight quantization, and a CUDA backend with GPU mirror system, GPU-resident KV cache, and fused operators for minimal PCIe transfers.
+Currently runs Qwen2.5-0.5B and SmolLM-135M. Supports OpenBLAS for accelerated linear projections, batched GQA attention, INT8 per-channel weight quantization, and a CUDA backend with GPU mirror system, GPU-resident KV cache, fused operators, and FP16 inference for minimal PCIe transfers and maximum throughput.
 
 ## Quick Start
 
@@ -21,8 +21,10 @@ bazel run //bin/qwen:qwen -- --model /path/to/Qwen2.5-0.5B --prompt "The capital
 
 # Run with CUDA backend (requires NVIDIA GPU + CUDA toolkit)
 bazel run -c opt //bin/qwen:qwen -- --model /path/to/Qwen2.5-0.5B --prompt "The capital of France is" --max_tokens 50 --backend cuda --quantize int8
-```
 
+# Run with FP16 inference (CUDA only, ~29% faster decode)
+bazel run -c opt //bin/qwen:qwen -- --model /path/to/Qwen2.5-0.5B --prompt "The capital of France is" --max_tokens 50 --backend cuda --quantize int8 --fp16
+```
 ### Example Output
 
 ```
@@ -78,6 +80,7 @@ models/                 # Model weights (not checked in)
 - [x] INT8 per-channel weight quantization with NEON-optimized `linear_q8` kernel (~2.7x decode speedup)
 - [x] sgemv dispatch for M=1 decode (eliminates sgemm packing overhead, +42% decode throughput)
 - [x] CUDA backend with GPU mirror system, GPU-resident KV cache, and fused operators (4.5x decode speedup over BLAS on Qwen2.5-0.5B)
+- [x] FP16 inference — all GPU ops use half precision with FP32 accumulation for stability (+29% decode throughput)
 
 ## Benchmarks
 
@@ -159,6 +162,15 @@ Optimization progression on Qwen2.5-0.5B decode:
 
 **GPU-resident KV cache**: KV cache stays on GPU, eliminating 96 PCIe memcpy per decode token (2 tensors × 2 KV × 24 layers).
 
+**FP16 inference** (`--fp16`): All GPU operations (linear, attention, RMSNorm, RoPE, SiLU) use half precision with FP32 accumulation for numerical stability. Halves memory bandwidth and enables Tensor Core utilization for all GEMMs. KV cache stored in FP16, halving GPU memory usage.
+
+| Mode | Decode | Improvement |
+|------|--------|-------------|
+| CUDA INT8 (FP32) | 113.7 tok/s | baseline |
+| CUDA INT8 (FP16) | **146.9 tok/s** | **+29.2%** |
+
+*Measured on Qwen2.5-0.5B, RTX 4060, `--backend cuda --quantize int8`.*
+
 **Fused operators**: Three operator fusions to reduce kernel launches and temporary buffers:
 - Gate/Up projection fusion — concatenate `gate_proj` + `up_proj` into a single `[2*intermediate, hidden]` weight, one matmul instead of two
 - Fused `silu_mul` — `silu(gate) * up` in a single kernel instead of separate `silu` + `mul`
@@ -193,9 +205,9 @@ Optimization progression on Qwen2.5-0.5B decode:
 2. ~~**BLAS integration**~~ — done, OpenBLAS backend with ~9x linear speedup + ~6x batched GQA attention
 3. ~~**INT8 weight quantization**~~ — done, per-channel absmax with NEON kernel, 2.7x decode speedup
 4. **INT4 quantization** — further bandwidth reduction
-5. **Instruct model support** — chat template formatting
-6. **Multi-threading** — parallelize matmul and independent ops
-7. ~~**GPU backend**~~ — done, CUDA backend with GPU mirror system + GPU-resident KV cache + fused ops, 4.5x decode speedup
+5. **Multi-threading** — parallelize matmul and independent ops
+6. ~~**GPU backend**~~ — done, CUDA backend with GPU mirror system + GPU-resident KV cache + fused ops, 4.5x decode speedup
+7. ~~**FP16 inference**~~ — done, +29% decode throughput with half-precision GPU ops
 
 ## Build Requirements
 

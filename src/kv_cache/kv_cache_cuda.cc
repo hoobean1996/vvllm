@@ -1,11 +1,14 @@
 #include "src/kv_cache/kv_cache_cuda.h"
 
 #include <algorithm>
+#include <cstdint>
 
 #include "src/backend/cuda_kernels.h"
 
 namespace vvllm
 {
+
+KVCacheCUDA::KVCacheCUDA(bool fp16) : fp16_(fp16) {}
 
 KVCacheCUDA::~KVCacheCUDA()
 {
@@ -23,9 +26,9 @@ void KVCacheCUDA::init(std::size_t num_layers, std::size_t kv_dim)
     kv_dim_ = kv_dim;
     seq_len_ = 0;
 
-    // Pre-allocate so k()/v() return non-null immediately
+    std::size_t elem_size = fp16_ ? sizeof(uint16_t) : sizeof(float);
     std::size_t init_cap = 128 * kv_dim;
-    std::size_t init_bytes = init_cap * sizeof(float);
+    std::size_t init_bytes = init_cap * elem_size;
     for (auto& kv : layers_)
     {
         kv.d_k = cuda_malloc(init_bytes);
@@ -40,17 +43,18 @@ void KVCacheCUDA::append(std::size_t layer, const float* k, const float* v,
     auto& kv = layers_[layer];
     std::size_t new_seq_len = seq_len_ + num_tokens;
     std::size_t needed = new_seq_len * kv_dim_;
+    std::size_t elem_size = fp16_ ? sizeof(uint16_t) : sizeof(float);
 
     // Grow buffer if needed (2x growth factor)
     if (needed > kv.capacity)
     {
         std::size_t new_cap = std::max(needed, kv.capacity * 2);
-        std::size_t new_bytes = new_cap * sizeof(float);
+        std::size_t new_bytes = new_cap * elem_size;
         void* new_dk = cuda_malloc(new_bytes);
         void* new_dv = cuda_malloc(new_bytes);
         if (kv.d_k)
         {
-            std::size_t old_bytes = seq_len_ * kv_dim_ * sizeof(float);
+            std::size_t old_bytes = seq_len_ * kv_dim_ * elem_size;
             cuda_memcpy_d2d(new_dk, kv.d_k, old_bytes);
             cuda_memcpy_d2d(new_dv, kv.d_v, old_bytes);
             cuda_free(kv.d_k);
@@ -61,9 +65,10 @@ void KVCacheCUDA::append(std::size_t layer, const float* k, const float* v,
         kv.capacity = new_cap;
     }
 
-    // Copy new tokens to GPU KV buffer (auto-detects host or device source)
-    std::size_t token_bytes = num_tokens * kv_dim_ * sizeof(float);
-    std::size_t offset_bytes = seq_len_ * kv_dim_ * sizeof(float);
+    // Copy new tokens to GPU KV buffer
+    // In FP16 mode, source pointers are FP16 device pointers (from BackendCUDA mirrors)
+    std::size_t token_bytes = num_tokens * kv_dim_ * elem_size;
+    std::size_t offset_bytes = seq_len_ * kv_dim_ * elem_size;
     cuda_memcpy_auto(static_cast<char*>(kv.d_k) + offset_bytes, k, token_bytes);
     cuda_memcpy_auto(static_cast<char*>(kv.d_v) + offset_bytes, v, token_bytes);
 }
