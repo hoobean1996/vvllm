@@ -18,7 +18,7 @@ public:
     void begin_step();
     void end_step();
 
-    void print(bool kv_cache, bool quantize) const;
+    void print(bool quantize) const;
 
 private:
     static double to_ms(Clock::duration d);

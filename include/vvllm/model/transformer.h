@@ -89,7 +89,8 @@ std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>
     // 1. Embedding lookup
     for (std::size_t s = 0; s < seq_len; s++)
     {
-        backend.embedding(x.data() + s * hidden, embed_tokens, token_ids[s], hidden);
+        backend.embedding(x.data() + s * hidden, embed_tokens, token_ids[s], hidden,
+                          config.vocab_size);
     }
 
     // Scratch buffers (only for new tokens)

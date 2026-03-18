@@ -329,7 +329,7 @@ TEST(BackendCPUTest, EmbeddingLookup)
     // clang-format on
     std::vector<float> out(4);
 
-    backend.embedding(out.data(), table.data(), 1, 4);
+    backend.embedding(out.data(), table.data(), 1, 4, 3);
 
     EXPECT_FLOAT_EQ(out[0], 0.5f);
     EXPECT_FLOAT_EQ(out[1], 0.6f);
@@ -343,7 +343,7 @@ TEST(BackendCPUTest, EmbeddingFirstToken)
     std::vector<float> table = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
     std::vector<float> out(3);
 
-    backend.embedding(out.data(), table.data(), 0, 3);
+    backend.embedding(out.data(), table.data(), 0, 3, 2);
 
     EXPECT_FLOAT_EQ(out[0], 1.0f);
     EXPECT_FLOAT_EQ(out[1], 2.0f);

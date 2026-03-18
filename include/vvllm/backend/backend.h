@@ -77,7 +77,7 @@ public:
 
     /// Copy embedding row: out[hidden_size] = table[token_id * hidden_size ..]
     virtual void embedding(float* out, const float* table, std::size_t token_id,
-                           std::size_t hidden_size) = 0;
+                           std::size_t hidden_size, std::size_t vocab_size) = 0;
 
     /// Multi-head causal attention for a single query position.
     /// q: [seq_len, num_heads, head_dim], k/v: [attend_len, num_kv_heads, head_dim]

@@ -335,7 +335,7 @@ void BackendCPU::linear_q8_add(float* out, const float* inp, const int8_t* weigh
 }
 
 void BackendCPU::embedding(float* out, const float* table, std::size_t token_id,
-                           std::size_t hidden_size)
+                           std::size_t hidden_size, std::size_t /*vocab_size*/)
 {
     std::memcpy(out, table + token_id * hidden_size, hidden_size * sizeof(float));
 }

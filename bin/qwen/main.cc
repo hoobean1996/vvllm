@@ -22,7 +22,6 @@ DEFINE_int32(max_tokens, 50, "Maximum number of tokens to generate");
 DEFINE_double(temperature, 0.7, "Sampling temperature (0 = greedy)");
 DEFINE_double(top_p, 0.9, "Top-p (nucleus) sampling threshold");
 DEFINE_uint64(seed, 42, "Random seed for sampling");
-DEFINE_bool(kv_cache, true, "Enable KV cache (disable to recompute full sequence each step)");
 DEFINE_string(backend, "cpu", "Backend to use: cpu, blas, cuda");
 DEFINE_string(quantize, "", "Weight quantization: int8 (empty for none)");
 DEFINE_bool(fp16, false, "Use FP16 inference (CUDA only)");
@@ -157,21 +156,14 @@ int main(int argc, char* argv[])
 
         stats.begin_step();
 
-        if (FLAGS_kv_cache)
-        {
-            std::size_t pos = token_ids.size() - 1;
-            logits = vvllm::forward(model, {next_token}, pos, *kv_cache);
-        }
-        else
-        {
-            logits = vvllm::forward(model, token_ids, 0, *kv_cache);
-        }
+        std::size_t pos = token_ids.size() - 1;
+        logits = vvllm::forward(model, {next_token}, pos, *kv_cache);
 
         stats.end_step();
     }
 
     std::cout << "\n\n";
-    stats.print(FLAGS_kv_cache, quantize);
+    stats.print(quantize);
 
     return 0;
 }

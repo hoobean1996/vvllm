@@ -689,16 +689,27 @@ void BackendCUDA::linear_q8(float* out, const float* inp, const int8_t* weight,
 // ============================================================
 
 void BackendCUDA::embedding(float* out, const float* table, std::size_t token_id,
-                            std::size_t hidden_size)
+                            std::size_t hidden_size, std::size_t vocab_size)
 {
-    // Embedding lookup on CPU; mirror will convert to FP16 when next op reads it
-    BackendCPU::embedding(out, table, token_id, hidden_size);
+    std::size_t table_bytes = vocab_size * hidden_size * sizeof(float);
+    std::size_t out_bytes = hidden_size * sizeof(float);
 
-    auto it = mirrors_.find(out);
-    if (it != mirrors_.end())
+    if (fp16_)
     {
-        it->second.valid = false;
+        void* d_table = cache_weight_as_fp16(table, table_bytes);
+        bool reused;
+        void* d_out = gpu_output_fp16(out, out_bytes, reused);
+        cuda_embedding_fp16(d_out, d_table, token_id, hidden_size);
+        finish_output_fp16(out, d_out, out_bytes, reused);
+        return;
     }
+
+    // GPU lookup: cache table, D2D copy one row
+    float* d_table = static_cast<float*>(cache_weight(table, table_bytes));
+    bool reused;
+    float* d_out = static_cast<float*>(gpu_output(out, out_bytes, reused));
+    cuda_embedding(d_out, d_table, token_id, hidden_size);
+    finish_output(out, d_out, out_bytes, reused);
 }
 
 // ============================================================

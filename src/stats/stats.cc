@@ -23,10 +23,9 @@ void Stats::end_step()
     generated_++;
 }
 
-void Stats::print(bool kv_cache, bool quantize) const
+void Stats::print(bool quantize) const
 {
     std::printf("=== Performance ===\n");
-    std::printf("KV cache:    %s\n", kv_cache ? "enabled" : "disabled");
     std::printf("Quantize:    %s\n", quantize ? "int8" : "none");
     std::printf("Prompt:      %zu tokens\n", prompt_tokens_);
     std::printf("Generated:   %d tokens\n\n", generated_);
