@@ -831,3 +831,348 @@ extern "C" void cuda_add_bias(float* out, const float* bias, size_t M, size_t N)
     size_t grid = (total + block - 1) / block;
     add_bias_kernel<<<grid, block>>>(out, bias, M, N);
 }
+
+// ============================================================
+// FP16 kernels — load/store as half, accumulate in float
+// ============================================================
+
+__global__ void add_fp16_kernel(half* out, const half* x, const half* y, size_t n)
+{
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = __float2half(__half2float(x[i]) + __half2float(y[i]));
+}
+
+__global__ void mul_fp16_kernel(half* out, const half* x, const half* y, size_t n)
+{
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = __float2half(__half2float(x[i]) * __half2float(y[i]));
+}
+
+__global__ void silu_fp16_kernel(half* out, const half* x, size_t n)
+{
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+    {
+        float v = __half2float(x[i]);
+        out[i] = __float2half(v / (1.0f + expf(-v)));
+    }
+}
+
+__global__ void silu_mul_fp16_kernel(half* out, const half* gate, const half* up, size_t n)
+{
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+    {
+        float v = __half2float(gate[i]);
+        out[i] = __float2half((v / (1.0f + expf(-v))) * __half2float(up[i]));
+    }
+}
+
+__global__ void rms_norm_fp16_kernel(half* out, const half* x, const half* weight, size_t n,
+                                      float eps)
+{
+    extern __shared__ float sdata[];
+    size_t tid = threadIdx.x;
+    size_t stride = blockDim.x;
+
+    float local_sum = 0.0f;
+    for (size_t i = tid; i < n; i += stride)
+    {
+        float v = __half2float(x[i]);
+        local_sum += v * v;
+    }
+    sdata[tid] = local_sum;
+    __syncthreads();
+
+    for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        __syncthreads();
+    }
+
+    float rms = sqrtf(sdata[0] / n + eps);
+
+    for (size_t i = tid; i < n; i += stride)
+    {
+        out[i] = __float2half(__half2float(x[i]) / rms * __half2float(weight[i]));
+    }
+}
+
+__global__ void softmax_fp16_kernel(half* out, const half* x, size_t n)
+{
+    extern __shared__ float sdata[];
+    size_t tid = threadIdx.x;
+    size_t stride = blockDim.x;
+
+    float local_max = -1e30f;
+    for (size_t i = tid; i < n; i += stride)
+    {
+        float v = __half2float(x[i]);
+        if (v > local_max) local_max = v;
+    }
+    sdata[tid] = local_max;
+    __syncthreads();
+    for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s) sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+        __syncthreads();
+    }
+    float max_val = sdata[0];
+    __syncthreads();
+
+    float local_sum = 0.0f;
+    for (size_t i = tid; i < n; i += stride)
+    {
+        float e = expf(__half2float(x[i]) - max_val);
+        out[i] = __float2half(e);
+        local_sum += e;
+    }
+    sdata[tid] = local_sum;
+    __syncthreads();
+    for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        __syncthreads();
+    }
+    float sum = sdata[0];
+    __syncthreads();
+
+    for (size_t i = tid; i < n; i += stride)
+    {
+        out[i] = __float2half(__half2float(out[i]) / sum);
+    }
+}
+
+__global__ void rope_fp16_kernel(half* q, half* k, size_t seq_len, size_t num_heads,
+                                  size_t num_kv_heads, size_t head_dim, size_t pos, float theta)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t s = blockIdx.y;
+    size_t hdim_half = head_dim / 2;
+    size_t max_heads = num_heads > num_kv_heads ? num_heads : num_kv_heads;
+    size_t total_pairs = hdim_half * max_heads;
+    if (idx >= total_pairs || s >= seq_len) return;
+
+    size_t h = idx / hdim_half;
+    size_t i = idx % hdim_half;
+    size_t position = pos + s;
+    float freq = 1.0f / powf(theta, (float)(2 * i) / (float)head_dim);
+    float angle = position * freq;
+    float cos_a = cosf(angle);
+    float sin_a = sinf(angle);
+
+    if (h < num_heads)
+    {
+        half* head_q = q + s * num_heads * head_dim + h * head_dim;
+        float x0 = __half2float(head_q[i]);
+        float x1 = __half2float(head_q[i + hdim_half]);
+        head_q[i] = __float2half(x0 * cos_a - x1 * sin_a);
+        head_q[i + hdim_half] = __float2half(x0 * sin_a + x1 * cos_a);
+    }
+    if (h < num_kv_heads)
+    {
+        half* head_k = k + s * num_kv_heads * head_dim + h * head_dim;
+        float x0 = __half2float(head_k[i]);
+        float x1 = __half2float(head_k[i + hdim_half]);
+        head_k[i] = __float2half(x0 * cos_a - x1 * sin_a);
+        head_k[i + hdim_half] = __float2half(x0 * sin_a + x1 * cos_a);
+    }
+}
+
+__global__ void causal_attention_fp16_kernel(half* out, const half* q, size_t q_idx, const half* k,
+                                              const half* v, size_t attend_len, size_t num_heads,
+                                              size_t num_kv_heads, size_t head_dim, float scale)
+{
+    size_t h = blockIdx.x;
+    if (h >= num_heads) return;
+
+    extern __shared__ float sdata[];
+    float* scores = sdata;
+    float* reduce_buf = sdata + attend_len;
+
+    size_t tid = threadIdx.x;
+    size_t stride = blockDim.x;
+    size_t groups = num_heads / num_kv_heads;
+    size_t kv_h = h / groups;
+
+    const half* q_head = q + q_idx * num_heads * head_dim + h * head_dim;
+
+    // QK^T scores (accumulate in FP32)
+    for (size_t t = tid; t < attend_len; t += stride)
+    {
+        const half* k_head = k + t * num_kv_heads * head_dim + kv_h * head_dim;
+        float dot = 0.0f;
+        for (size_t d = 0; d < head_dim; d++)
+            dot += __half2float(q_head[d]) * __half2float(k_head[d]);
+        scores[t] = dot * scale;
+    }
+    __syncthreads();
+
+    // Softmax
+    float local_max = -1e30f;
+    for (size_t t = tid; t < attend_len; t += stride)
+        if (scores[t] > local_max) local_max = scores[t];
+    reduce_buf[tid] = local_max;
+    __syncthreads();
+    for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s) reduce_buf[tid] = fmaxf(reduce_buf[tid], reduce_buf[tid + s]);
+        __syncthreads();
+    }
+    float max_val = reduce_buf[0];
+    __syncthreads();
+
+    float local_sum = 0.0f;
+    for (size_t t = tid; t < attend_len; t += stride)
+    {
+        float e = expf(scores[t] - max_val);
+        scores[t] = e;
+        local_sum += e;
+    }
+    reduce_buf[tid] = local_sum;
+    __syncthreads();
+    for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s) reduce_buf[tid] += reduce_buf[tid + s];
+        __syncthreads();
+    }
+    float sum = reduce_buf[0];
+    __syncthreads();
+    for (size_t t = tid; t < attend_len; t += stride)
+        scores[t] /= sum;
+    __syncthreads();
+
+    // Weighted V sum → FP16 output
+    half* head_out = out + h * head_dim;
+    for (size_t d = tid; d < head_dim; d += stride)
+    {
+        float val = 0.0f;
+        for (size_t t = 0; t < attend_len; t++)
+            val += scores[t] * __half2float(v[t * num_kv_heads * head_dim + kv_h * head_dim + d]);
+        head_out[d] = __float2half(val);
+    }
+}
+
+__global__ void add_bias_fp16_kernel(half* out, const half* bias, size_t M, size_t N)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < M * N)
+        out[idx] = __float2half(__half2float(out[idx]) + __half2float(bias[idx % N]));
+}
+
+__global__ void fp16_to_fp32_kernel(float* out, const half* in, size_t n)
+{
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = __half2float(in[i]);
+}
+
+// ============================================================
+// FP16 kernel launch wrappers
+// ============================================================
+
+extern "C" void cuda_add_fp16(void* out, const void* x, const void* y, size_t n)
+{
+    size_t block = 256;
+    size_t grid = (n + block - 1) / block;
+    add_fp16_kernel<<<grid, block>>>((half*)out, (const half*)x, (const half*)y, n);
+}
+
+extern "C" void cuda_mul_fp16(void* out, const void* x, const void* y, size_t n)
+{
+    size_t block = 256;
+    size_t grid = (n + block - 1) / block;
+    mul_fp16_kernel<<<grid, block>>>((half*)out, (const half*)x, (const half*)y, n);
+}
+
+extern "C" void cuda_silu_fp16(void* out, const void* x, size_t n)
+{
+    size_t block = 256;
+    size_t grid = (n + block - 1) / block;
+    silu_fp16_kernel<<<grid, block>>>((half*)out, (const half*)x, n);
+}
+
+extern "C" void cuda_silu_mul_fp16(void* out, const void* gate, const void* up, size_t n)
+{
+    size_t block = 256;
+    size_t grid = (n + block - 1) / block;
+    silu_mul_fp16_kernel<<<grid, block>>>((half*)out, (const half*)gate, (const half*)up, n);
+}
+
+extern "C" void cuda_rms_norm_fp16(void* out, const void* x, const void* weight, size_t n,
+                                    float eps)
+{
+    size_t block = 256;
+    size_t smem = block * sizeof(float);
+    rms_norm_fp16_kernel<<<1, block, smem>>>((half*)out, (const half*)x, (const half*)weight, n,
+                                              eps);
+}
+
+extern "C" void cuda_softmax_fp16(void* out, const void* x, size_t n)
+{
+    size_t block = 256;
+    size_t smem = block * sizeof(float);
+    softmax_fp16_kernel<<<1, block, smem>>>((half*)out, (const half*)x, n);
+}
+
+extern "C" void cuda_rope_fp16(void* q, void* k, size_t seq_len, size_t num_heads,
+                                size_t num_kv_heads, size_t head_dim, size_t pos, float theta)
+{
+    size_t hdim_half = head_dim / 2;
+    size_t max_heads = num_heads > num_kv_heads ? num_heads : num_kv_heads;
+    size_t total_pairs = hdim_half * max_heads;
+    size_t block = 256;
+    size_t grid_x = (total_pairs + block - 1) / block;
+    dim3 grid(grid_x, seq_len);
+    rope_fp16_kernel<<<grid, block>>>((half*)q, (half*)k, seq_len, num_heads, num_kv_heads,
+                                       head_dim, pos, theta);
+}
+
+extern "C" void cuda_embedding_fp16(void* out, const void* table, size_t token_id,
+                                     size_t hidden_size)
+{
+    CUDA_CHECK(cudaMemcpy(out, (const half*)table + token_id * hidden_size,
+                           hidden_size * sizeof(half), cudaMemcpyDeviceToDevice));
+}
+
+extern "C" void cuda_causal_attention_fp16(void* out, const void* q, size_t q_idx, const void* k,
+                                            const void* v, size_t attend_len, size_t num_heads,
+                                            size_t num_kv_heads, size_t head_dim, float scale)
+{
+    size_t block = 256;
+    size_t smem = (attend_len + block) * sizeof(float);
+    causal_attention_fp16_kernel<<<num_heads, block, smem>>>(
+        (half*)out, (const half*)q, q_idx, (const half*)k, (const half*)v, attend_len, num_heads,
+        num_kv_heads, head_dim, scale);
+}
+
+extern "C" void cuda_add_bias_fp16(void* out, const void* bias, size_t M, size_t N)
+{
+    size_t total = M * N;
+    size_t block = 256;
+    size_t grid = (total + block - 1) / block;
+    add_bias_fp16_kernel<<<grid, block>>>((half*)out, (const half*)bias, M, N);
+}
+
+extern "C" void cuda_cublas_hgemm_fp16(void* out_fp16, const void* inp_fp16,
+                                        const void* weight_fp16, size_t M, size_t N, size_t K,
+                                        float beta)
+{
+    float alpha = 1.0f;
+    CUBLAS_CHECK(cublasGemmEx(g_cublas_handle,
+                               CUBLAS_OP_T, CUBLAS_OP_N,
+                               (int)N, (int)M, (int)K,
+                               &alpha,
+                               weight_fp16, CUDA_R_16F, (int)K,
+                               inp_fp16, CUDA_R_16F, (int)K,
+                               &beta,
+                               out_fp16, CUDA_R_16F, (int)N,
+                               CUBLAS_COMPUTE_32F,
+                               CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+}
+
+extern "C" void cuda_fp16_to_fp32(float* out, const void* in, size_t n)
+{
+    size_t block = 256;
+    size_t grid = (n + block - 1) / block;
+    fp16_to_fp32_kernel<<<grid, block>>>(out, (const half*)in, n);
+}
