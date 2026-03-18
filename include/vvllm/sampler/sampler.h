@@ -1,7 +1,8 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
+
+#include "vvllm/tensor/tensor.h"
 
 namespace vvllm
 {
@@ -11,8 +12,8 @@ class Sampler
 public:
     virtual ~Sampler() = default;
 
-    /// Sample a token ID from the logits vector.
-    virtual int sample(const std::vector<float>& logits, int step) = 0;
+    /// Sample a token ID from the logits tensor (CPU or GPU).
+    virtual int sample(const Tensor& logits, int step) = 0;
 };
 
 }  // namespace vvllm

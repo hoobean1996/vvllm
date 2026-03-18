@@ -298,7 +298,7 @@ void BM_Prefill(benchmark::State& state)
         auto logits = vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
                                                  model.final_norm_weight.data(), model.config,
                                                  backend, cache, token_ids, 0);
-        benchmark::DoNotOptimize(logits.data());
+        benchmark::DoNotOptimize(logits.raw_data());
     }
     state.SetItemsProcessed(state.iterations() * static_cast<long>(seq_len));
 }
@@ -338,7 +338,7 @@ void BM_DecodeWithCache(benchmark::State& state)
         auto logits = vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
                                                  model.final_norm_weight.data(), model.config,
                                                  backend, cache, decode_id, context_len);
-        benchmark::DoNotOptimize(logits.data());
+        benchmark::DoNotOptimize(logits.raw_data());
     }
     state.SetItemsProcessed(state.iterations());
 }
@@ -371,7 +371,7 @@ void BM_DecodeNoCache(benchmark::State& state)
         auto logits = vvllm::transformer_forward(model.layers, model.embed_tokens.data(),
                                                  model.final_norm_weight.data(), model.config,
                                                  backend, cache, token_ids, 0);
-        benchmark::DoNotOptimize(logits.data());
+        benchmark::DoNotOptimize(logits.raw_data());
     }
     state.SetItemsProcessed(state.iterations());
 }

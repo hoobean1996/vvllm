@@ -83,8 +83,8 @@ void Qwen2Model::load_weights(const std::unordered_map<std::string, Tensor>& wei
     }
 }
 
-std::vector<float> Qwen2Model::forward(const std::vector<int>& token_ids, std::size_t pos,
-                                       KVCache& kv_cache)
+Tensor Qwen2Model::forward(const std::vector<int>& token_ids, std::size_t pos,
+                           KVCache& kv_cache)
 {
     return transformer_forward(layers_, embed_tokens_, final_norm_weight_, config_, backend_,
                                kv_cache, token_ids, pos);

@@ -13,7 +13,7 @@ class SamplerCPU : public Sampler
 public:
     SamplerCPU(float temperature, float top_p, std::uint64_t seed);
 
-    int sample(const std::vector<float>& logits, int step) override;
+    int sample(const Tensor& logits, int step) override;
 
 private:
     float temperature_;

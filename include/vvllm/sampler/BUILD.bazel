@@ -4,4 +4,5 @@ cc_library(
     name = "sampler",
     hdrs = ["sampler.h"],
     strip_include_prefix = "//include",
+    deps = ["//include/vvllm/tensor"],
 )

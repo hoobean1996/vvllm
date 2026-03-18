@@ -12,22 +12,23 @@ SamplerCPU::SamplerCPU(float temperature, float top_p, std::uint64_t seed)
 {
 }
 
-int SamplerCPU::sample(const std::vector<float>& logits, int /*step*/)
+int SamplerCPU::sample(const Tensor& logits, int /*step*/)
 {
+    const float* data = logits.data<float>();
     const std::size_t n = logits.size();
 
     // Greedy argmax when temperature is 0
     if (temperature_ == 0.0f)
     {
         return static_cast<int>(
-            std::distance(logits.begin(), std::max_element(logits.begin(), logits.end())));
+            std::distance(data, std::max_element(data, data + n)));
     }
 
     // Temperature scaling
     std::vector<float> scaled(n);
     for (std::size_t i = 0; i < n; i++)
     {
-        scaled[i] = logits[i] / temperature_;
+        scaled[i] = data[i] / temperature_;
     }
 
     // Softmax (subtract max for numerical stability)

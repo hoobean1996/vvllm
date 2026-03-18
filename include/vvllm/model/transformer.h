@@ -62,11 +62,11 @@ void rms_norm_seq(float* out, const float* x, const float* weight, std::size_t s
 /// Attn must provide: q_proj_weight, k_proj_weight, v_proj_weight, o_proj_weight.
 /// ADL free functions q_bias(Attn&), k_bias(Attn&), v_bias(Attn&) resolve bias.
 template <typename Attn>
-std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>& layers,
-                                       const float* embed_tokens, const float* final_norm_weight,
-                                       const ModelConfig& config, Backend& backend,
-                                       KVCache& kv_cache, const std::vector<int>& token_ids,
-                                       std::size_t pos)
+Tensor transformer_forward(const std::vector<TransformerBlock<Attn>>& layers,
+                           const float* embed_tokens, const float* final_norm_weight,
+                           const ModelConfig& config, Backend& backend,
+                           KVCache& kv_cache, const std::vector<int>& token_ids,
+                           std::size_t pos)
 {
     const std::size_t head_dim = config.hidden_size / config.num_attention_heads;
     const std::size_t seq_len = token_ids.size();
@@ -197,32 +197,19 @@ std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>
                      eps);
 
     // 4. logits = final_out * embed_tokens  (tied weights)
-    // Logits always computed in FP32 for sampler precision
+    // Compute logits in compute_dtype, then ensure FP32 for sampler
     Tensor logits({static_cast<std::size_t>(config.vocab_size)}, compute_dtype, dev);
     linear(logits.at(0), final_out.at(0), embed_tokens, nullptr, 1, config.vocab_size, hidden,
            backend);
 
-    // Download logits to CPU as FP32
-    std::vector<float> result(config.vocab_size);
-    if (compute_dtype == DType::Float16 && dev == Device::CUDA)
+    // Ensure logits are FP32 (sampler expects FP32 regardless of device)
+    if (compute_dtype == DType::Float16)
     {
-        // FP16 logits on GPU → convert to FP32 on GPU → download
         Tensor logits_fp32({static_cast<std::size_t>(config.vocab_size)}, DType::Float32, dev);
         backend.fp16_to_fp32(logits_fp32.data<float>(), logits.raw_data(), config.vocab_size);
-        Tensor cpu_logits = logits_fp32.to(Device::CPU);
-        std::memcpy(result.data(), cpu_logits.data<float>(), result.size() * sizeof(float));
+        return logits_fp32;
     }
-    else if (dev == Device::CUDA)
-    {
-        Tensor cpu_logits = logits.to(Device::CPU);
-        std::memcpy(result.data(), cpu_logits.data<float>(), result.size() * sizeof(float));
-    }
-    else
-    {
-        std::memcpy(result.data(), logits.data<float>(), result.size() * sizeof(float));
-    }
-
-    return result;
+    return logits;
 }
 
 }  // namespace vvllm

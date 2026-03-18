@@ -26,7 +26,8 @@ void load_weights(AnyModel& model, const std::unordered_map<std::string, Tensor>
                   bool quantize = false);
 
 /// Run forward pass: token_ids -> logits for the last token.
-std::vector<float> forward(AnyModel& model, const std::vector<int>& token_ids, std::size_t pos,
-                           KVCache& kv_cache);
+/// Returns FP32 Tensor on the backend's device (CPU or CUDA).
+Tensor forward(AnyModel& model, const std::vector<int>& token_ids, std::size_t pos,
+               KVCache& kv_cache);
 
 }  // namespace vvllm

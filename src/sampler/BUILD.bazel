@@ -13,7 +13,6 @@ cc_library(
     srcs = ["sampler_cuda.cc"],
     hdrs = ["sampler_cuda.h"],
     deps = [
-        "//include/vvllm/backend",
         "//include/vvllm/sampler",
         "//src/backend:cuda_kernels",
     ],

@@ -29,6 +29,7 @@ cc_binary(
         "//src/backend:backend_blas",
         "//src/kv_cache:kv_cache_cpu",
         "//src/quantize",
+        "//src/tensor",
         "@google_benchmark//:benchmark_main",
     ],
 )
