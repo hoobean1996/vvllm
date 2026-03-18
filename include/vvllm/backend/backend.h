@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <memory>
 
+#include "vvllm/tensor/device.h"
+
 namespace vvllm
 {
 
@@ -100,6 +102,9 @@ public:
 
     /// Whether this backend uses FP16 precision for GPU computation.
     virtual bool is_fp16() const { return false; }
+
+    /// Which device this backend targets.
+    virtual Device device() const { return Device::CPU; }
 };
 
 std::unique_ptr<Backend> create_backend(BackendKind kind);

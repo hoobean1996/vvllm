@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -10,6 +11,7 @@
 #include "vvllm/backend/backend.h"
 #include "vvllm/config/config.h"
 #include "vvllm/kv_cache/kv_cache.h"
+#include "vvllm/tensor/device.h"
 #include "vvllm/tensor/tensor.h"
 
 namespace vvllm
@@ -76,6 +78,8 @@ std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>
     const float eps = static_cast<float>(config.rms_norm_eps);
     const float rope_theta = static_cast<float>(config.rope_theta);
 
+    Device dev = backend.device();
+
     // Invalidate stale GPU mirrors from previous forward passes
     backend.begin_forward();
 
@@ -83,24 +87,24 @@ std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>
     kv_cache.init(config.num_hidden_layers, kv_dim);
     if (pos == 0) kv_cache.reset();
 
-    // Hidden state: [seq_len, hidden]
-    std::vector<float> x(seq_len * hidden);
+    // Hidden state: [seq_len, hidden] — on backend's device
+    Tensor x({seq_len * hidden}, DType::Float32, dev);
 
     // 1. Embedding lookup
     for (std::size_t s = 0; s < seq_len; s++)
     {
-        backend.embedding(x.data() + s * hidden, embed_tokens, token_ids[s], hidden,
+        backend.embedding(x.data<float>() + s * hidden, embed_tokens, token_ids[s], hidden,
                           config.vocab_size);
     }
 
-    // Scratch buffers (only for new tokens)
-    std::vector<float> norm_out(seq_len * hidden);
-    std::vector<float> q(seq_len * num_heads * head_dim);
-    std::vector<float> k_new(seq_len * kv_dim);
-    std::vector<float> v_new(seq_len * kv_dim);
-    std::vector<float> attn_out(seq_len * hidden);
-    std::vector<float> gate_up(seq_len * 2 * intermediate);
-    std::vector<float> gate(seq_len * intermediate);
+    // Scratch buffers on backend's device
+    Tensor norm_out({seq_len * hidden}, DType::Float32, dev);
+    Tensor q({seq_len * num_heads * head_dim}, DType::Float32, dev);
+    Tensor k_new({seq_len * kv_dim}, DType::Float32, dev);
+    Tensor v_new({seq_len * kv_dim}, DType::Float32, dev);
+    Tensor attn_out({seq_len * hidden}, DType::Float32, dev);
+    Tensor gate_up({seq_len * 2 * intermediate}, DType::Float32, dev);
+    Tensor gate({seq_len * intermediate}, DType::Float32, dev);
 
     // 2. Transformer layers
     for (std::size_t layer_idx = 0; layer_idx < config.num_hidden_layers; layer_idx++)
@@ -112,35 +116,23 @@ std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>
         // --- Self-Attention ---
 
         // norm_out = rms_norm(x)
-        rms_norm_seq(norm_out.data(), x.data(), layer.input_layernorm_weight, seq_len, hidden, eps,
-                     backend);
+        rms_norm_seq(norm_out.data<float>(), x.data<float>(), layer.input_layernorm_weight,
+                     seq_len, hidden, eps, backend);
 
         // Q/K/V projections: batched over all tokens
-        linear(q.data(), norm_out.data(), attn.q_proj_weight, q_bias(attn),
+        linear(q.data<float>(), norm_out.data<float>(), attn.q_proj_weight, q_bias(attn),
                seq_len, num_heads * head_dim, hidden, backend);
-        linear(k_new.data(), norm_out.data(), attn.k_proj_weight, k_bias(attn),
+        linear(k_new.data<float>(), norm_out.data<float>(), attn.k_proj_weight, k_bias(attn),
                seq_len, kv_dim, hidden, backend);
-        linear(v_new.data(), norm_out.data(), attn.v_proj_weight, v_bias(attn),
+        linear(v_new.data<float>(), norm_out.data<float>(), attn.v_proj_weight, v_bias(attn),
                seq_len, kv_dim, hidden, backend);
 
         // q, k_new = rope(q, k_new)
-        backend.rope(q.data(), k_new.data(), seq_len, num_heads, num_kv_heads, head_dim, pos,
-                     rope_theta);
+        backend.rope(q.data<float>(), k_new.data<float>(), seq_len, num_heads, num_kv_heads,
+                     head_dim, pos, rope_theta);
 
-        // Append new K/V to cache — use GPU mirrors when available (D2D),
-        // otherwise flush to CPU and pass host pointers (H2D)
-        auto* d_k = static_cast<const float*>(backend.device_ptr(k_new.data()));
-        auto* d_v = static_cast<const float*>(backend.device_ptr(v_new.data()));
-        if (d_k && d_v)
-        {
-            kv_cache.append(layer_idx, d_k, d_v, seq_len);
-        }
-        else
-        {
-            backend.flush(k_new.data(), seq_len * kv_dim * sizeof(float));
-            backend.flush(v_new.data(), seq_len * kv_dim * sizeof(float));
-            kv_cache.append(layer_idx, k_new.data(), v_new.data(), seq_len);
-        }
+        // Append K/V to cache (pointers are already on the right device)
+        kv_cache.append(layer_idx, k_new.data<float>(), v_new.data<float>(), seq_len);
         const float* cache_k = kv_cache.k(layer_idx);
         const float* cache_v = kv_cache.v(layer_idx);
 
@@ -148,52 +140,63 @@ std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>
         float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
         for (std::size_t s = 0; s < seq_len; s++)
         {
-            backend.causal_attention(attn_out.data() + s * hidden, q.data(), s,
+            backend.causal_attention(attn_out.data<float>() + s * hidden, q.data<float>(), s,
                                      cache_k, cache_v,
                                      pos + s + 1, num_heads, num_kv_heads, head_dim, scale);
         }
 
         // x = attn_out @ o_weight^T + x  (fused projection + residual add)
-        linear_add(x.data(), attn_out.data(), attn.o_proj_weight,
-                   nullptr, x.data(), seq_len, hidden, hidden, backend);
+        linear_add(x.data<float>(), attn_out.data<float>(), attn.o_proj_weight,
+                   nullptr, x.data<float>(), seq_len, hidden, hidden, backend);
 
         // --- MLP ---
 
         // norm_out = rms_norm(x)
-        rms_norm_seq(norm_out.data(), x.data(), layer.post_attention_layernorm_weight, seq_len,
-                     hidden, eps, backend);
+        rms_norm_seq(norm_out.data<float>(), x.data<float>(),
+                     layer.post_attention_layernorm_weight, seq_len, hidden, eps, backend);
 
         // Fused gate+up projection: gate_up = norm_out @ gate_up_weight^T
-        linear(gate_up.data(), norm_out.data(), mlp.gate_up_proj_weight, nullptr,
+        linear(gate_up.data<float>(), norm_out.data<float>(), mlp.gate_up_proj_weight, nullptr,
                seq_len, 2 * intermediate, hidden, backend);
 
         // silu_mul per token: gate_up is [seq_len, 2*intermediate] interleaved
         for (std::size_t s = 0; s < seq_len; s++)
         {
-            float* gu = gate_up.data() + s * 2 * intermediate;
-            backend.silu_mul(gate.data() + s * intermediate, gu, gu + intermediate, intermediate);
+            float* gu = gate_up.data<float>() + s * 2 * intermediate;
+            backend.silu_mul(gate.data<float>() + s * intermediate, gu, gu + intermediate,
+                             intermediate);
         }
 
         // x = gate @ down_weight^T + x  (fused projection + residual add)
-        linear_add(x.data(), gate.data(), mlp.down_proj_weight, nullptr,
-                   x.data(), seq_len, hidden, intermediate, backend);
+        linear_add(x.data<float>(), gate.data<float>(), mlp.down_proj_weight, nullptr,
+                   x.data<float>(), seq_len, hidden, intermediate, backend);
     }
 
     // Advance cache position after all layers processed
     kv_cache.advance(seq_len);
 
     // 3. final_out = rms_norm(x[-1])  (last token only)
-    std::vector<float> final_out(hidden);
-    backend.rms_norm(final_out.data(), x.data() + (seq_len - 1) * hidden, final_norm_weight, hidden,
-                     eps);
+    Tensor final_out({hidden}, DType::Float32, dev);
+    backend.rms_norm(final_out.data<float>(), x.data<float>() + (seq_len - 1) * hidden,
+                     final_norm_weight, hidden, eps);
 
     // 4. logits = final_out * embed_tokens  (tied weights)
-    std::vector<float> logits(config.vocab_size);
-    linear(logits.data(), final_out.data(), embed_tokens, nullptr, 1, config.vocab_size, hidden,
-           backend);
+    Tensor logits({static_cast<std::size_t>(config.vocab_size)}, DType::Float32, dev);
+    linear(logits.data<float>(), final_out.data<float>(), embed_tokens, nullptr, 1,
+           config.vocab_size, hidden, backend);
 
-    backend.flush(logits.data(), logits.size() * sizeof(float));
-    return logits;
+    // Download logits to CPU if on GPU
+    if (dev == Device::CUDA)
+    {
+        Tensor cpu_logits = logits.to(Device::CPU);
+        std::vector<float> result(config.vocab_size);
+        std::memcpy(result.data(), cpu_logits.data<float>(), result.size() * sizeof(float));
+        return result;
+    }
+
+    std::vector<float> result(config.vocab_size);
+    std::memcpy(result.data(), logits.data<float>(), result.size() * sizeof(float));
+    return result;
 }
 
 }  // namespace vvllm

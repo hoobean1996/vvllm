@@ -10,13 +10,24 @@ SamplerCUDA::SamplerCUDA(float temperature, float top_p, std::uint64_t seed, Bac
 {
 }
 
+SamplerCUDA::~SamplerCUDA()
+{
+    if (d_logits_) cuda_free(d_logits_);
+}
+
 int SamplerCUDA::sample(const std::vector<float>& logits, int step)
 {
-    const void* d_logits = backend_.device_ptr(logits.data());
-    if (!d_logits) return -1;
+    std::size_t bytes = logits.size() * sizeof(float);
+    if (bytes > d_logits_bytes_)
+    {
+        if (d_logits_) cuda_free(d_logits_);
+        d_logits_ = cuda_malloc(bytes);
+        d_logits_bytes_ = bytes;
+    }
+    cuda_memcpy_h2d(d_logits_, logits.data(), bytes);
 
     int fp16 = backend_.is_fp16() ? 1 : 0;
-    return cuda_sample(d_logits, logits.size(), temperature_, top_p_, seed_, step, fp16);
+    return cuda_sample(d_logits_, logits.size(), temperature_, top_p_, seed_, step, fp16);
 }
 
 }  // namespace vvllm

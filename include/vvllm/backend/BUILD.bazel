@@ -4,4 +4,5 @@ cc_library(
     name = "backend",
     hdrs = ["backend.h"],
     strip_include_prefix = "//include",
+    deps = ["//include/vvllm/tensor:device"],
 )

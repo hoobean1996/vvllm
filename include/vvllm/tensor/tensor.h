@@ -6,14 +6,10 @@
 #include <initializer_list>
 #include <vector>
 
+#include "vvllm/tensor/device.h"
+
 namespace vvllm
 {
-
-enum class Device
-{
-    CPU,
-    CUDA
-};
 
 enum class DType
 {
