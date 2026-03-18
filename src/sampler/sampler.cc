@@ -1,18 +1,18 @@
+#include "src/sampler/sampler_cpu.h"
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
 
-#include "vvllm/sampler/sampler.h"
-
 namespace vvllm
 {
 
-Sampler::Sampler(float temperature, float top_p, std::uint64_t seed)
+SamplerCPU::SamplerCPU(float temperature, float top_p, std::uint64_t seed)
     : temperature_(temperature), top_p_(top_p), rng_(seed)
 {
 }
 
-int Sampler::sample(const std::vector<float>& logits)
+int SamplerCPU::sample(const std::vector<float>& logits, int /*step*/)
 {
     const std::size_t n = logits.size();
 
@@ -44,7 +44,6 @@ int Sampler::sample(const std::vector<float>& logits)
     }
 
     // Top-p: partial sort — only sort enough tokens to cover top_p.
-    // For typical distributions, top-p is satisfied within a few hundred tokens.
     std::vector<int> indices(n);
     std::iota(indices.begin(), indices.end(), 0);
     auto cmp = [&scaled](int a, int b) { return scaled[a] > scaled[b]; };

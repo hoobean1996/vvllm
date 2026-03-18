@@ -1,8 +1,21 @@
 cc_library(
     name = "sampler",
     srcs = ["sampler.cc"],
+    hdrs = ["sampler_cpu.h"],
     deps = [
         "//include/vvllm/sampler",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "sampler_cuda",
+    srcs = ["sampler_cuda.cc"],
+    hdrs = ["sampler_cuda.h"],
+    deps = [
+        "//include/vvllm/backend",
+        "//include/vvllm/sampler",
+        "//src/backend:cuda_kernels",
     ],
     visibility = ["//visibility:public"],
 )

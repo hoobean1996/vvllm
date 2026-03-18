@@ -12,6 +12,8 @@
 #include "vvllm/config/config.h"
 #include "vvllm/model/model.h"
 #include "vvllm/safetensors/safetensors.h"
+#include "src/sampler/sampler_cpu.h"
+#include "src/sampler/sampler_cuda.h"
 #include "vvllm/sampler/sampler.h"
 #include "vvllm/stats/stats.h"
 #include "vvllm/tokenizer/tokenizer.h"
@@ -120,18 +122,20 @@ int main(int argc, char* argv[])
         return false;
     };
 
-    // Create sampler
-    vvllm::Sampler sampler(static_cast<float>(FLAGS_temperature), static_cast<float>(FLAGS_top_p),
-                           FLAGS_seed);
-
-    // Create KV cache matching the backend
+    // Create sampler and KV cache matching the backend
+    std::unique_ptr<vvllm::Sampler> sampler;
     std::unique_ptr<vvllm::KVCache> kv_cache;
     if (FLAGS_backend == "cuda")
     {
+        sampler = std::make_unique<vvllm::SamplerCUDA>(
+            static_cast<float>(FLAGS_temperature), static_cast<float>(FLAGS_top_p), FLAGS_seed,
+            backend);
         kv_cache = std::make_unique<vvllm::KVCacheCUDA>(FLAGS_fp16);
     }
     else
     {
+        sampler = std::make_unique<vvllm::SamplerCPU>(
+            static_cast<float>(FLAGS_temperature), static_cast<float>(FLAGS_top_p), FLAGS_seed);
         kv_cache = std::make_unique<vvllm::KVCacheCPU>();
     }
 
@@ -147,15 +151,7 @@ int main(int argc, char* argv[])
 
     for (int step = 0; step < FLAGS_max_tokens; step++)
     {
-        // Try GPU sampling first (avoids 600KB logits download)
-        int next_token = backend.sample_gpu(logits.data(), logits.size(),
-                                            static_cast<float>(FLAGS_temperature),
-                                            static_cast<float>(FLAGS_top_p), FLAGS_seed, step);
-        if (next_token < 0)
-        {
-            // CPU fallback
-            next_token = sampler.sample(logits);
-        }
+        int next_token = sampler->sample(logits, step);
 
         if (is_eos(next_token)) break;
 

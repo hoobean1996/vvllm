@@ -98,9 +98,8 @@ public:
     /// Returns nullptr for CPU backends or when no valid mirror exists.
     virtual const void* device_ptr(const void* /*host_ptr*/) const { return nullptr; }
 
-    /// Sample a token from logits on the device. Returns -1 if not supported (CPU).
-    virtual int sample_gpu(const float* /*logits*/, std::size_t /*n*/, float /*temperature*/,
-                           float /*top_p*/, std::uint64_t /*seed*/, int /*step*/) { return -1; }
+    /// Whether this backend uses FP16 precision for GPU computation.
+    virtual bool is_fp16() const { return false; }
 };
 
 std::unique_ptr<Backend> create_backend(BackendKind kind);

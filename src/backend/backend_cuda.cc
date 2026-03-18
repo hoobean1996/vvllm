@@ -813,14 +813,6 @@ void BackendCUDA::causal_attention(float* out, const float* q, std::size_t q_idx
     finish_output(out, d_out, out_bytes, reused);
 }
 
-int BackendCUDA::sample_gpu(const float* logits, std::size_t n, float temperature, float top_p,
-                             std::uint64_t seed, int step)
-{
-    // Get logits from GPU mirror (they're already on GPU after forward pass)
-    auto it = mirrors_.find(logits);
-    if (it == mirrors_.end() || !it->second.valid) return -1;
-
-    return cuda_sample(it->second.d_ptr, n, temperature, top_p, seed, step, fp16_ ? 1 : 0);
-}
+bool BackendCUDA::is_fp16() const { return fp16_; }
 
 }  // namespace vvllm

@@ -52,8 +52,7 @@ public:
     void begin_forward() override;
     void flush(const void* ptr, std::size_t bytes) override;
     const void* device_ptr(const void* host_ptr) const override;
-    int sample_gpu(const float* logits, std::size_t n, float temperature, float top_p,
-                   std::uint64_t seed, int step) override;
+    bool is_fp16() const override;
 
 private:
     struct GpuBuf

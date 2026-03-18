@@ -12,6 +12,7 @@ cc_binary(
         "//src/model",
         "//src/safetensors",
         "//src/sampler",
+        "//src/sampler:sampler_cuda",
         "//src/stats",
         "//src/tokenizer",
         "@gflags//:gflags",
