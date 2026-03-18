@@ -170,23 +170,35 @@ std::string Tokenizer::decode(const std::vector<int>& token_ids) const
         }
     }
 
-    // Replace Ġ with space
+    // Convert BPE byte tokens back to raw bytes.
+    // BPE encodes byte N as chr(256 + N). In UTF-8:
+    //   chr(256..319)  = 0xC4 0x80..0xBF  (byte 0x00..0x3F)
+    //   chr(320..383)  = 0xC5 0x80..0xBF  (byte 0x40..0x7F)
+    //   chr(384..511)  = 0xC6..0xC7 ...   (byte 0x80..0xFF)
+    // Common examples: Ġ = chr(288) → space, Ċ = chr(266) → newline
     std::string output;
     size_t i = 0;
     while (i < result.size())
     {
-        // Ġ is 0xC4 0xA0 in UTF-8
-        if (i + 1 < result.size() && static_cast<unsigned char>(result[i]) == 0xC4 &&
-            static_cast<unsigned char>(result[i + 1]) == 0xA0)
+        auto c0 = static_cast<unsigned char>(result[i]);
+        if (i + 1 < result.size() && (c0 >= 0xC4 && c0 <= 0xC7))
         {
-            output += ' ';
-            i += 2;
+            auto c1 = static_cast<unsigned char>(result[i + 1]);
+            if ((c1 & 0xC0) == 0x80)  // valid 2-byte UTF-8 continuation
+            {
+                // Decode UTF-8 codepoint
+                unsigned int cp = ((c0 & 0x1F) << 6) | (c1 & 0x3F);
+                if (cp >= 256 && cp < 512)
+                {
+                    // BPE byte token: chr(256 + N) → raw byte N
+                    output += static_cast<char>(cp - 256);
+                    i += 2;
+                    continue;
+                }
+            }
         }
-        else
-        {
-            output += result[i];
-            i++;
-        }
+        output += result[i];
+        i++;
     }
 
     return output;
