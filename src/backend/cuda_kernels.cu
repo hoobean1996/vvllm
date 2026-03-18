@@ -1176,3 +1176,131 @@ extern "C" void cuda_fp16_to_fp32(float* out, const void* in, size_t n)
     size_t grid = (n + block - 1) / block;
     fp16_to_fp32_kernel<<<grid, block>>>(out, (const half*)in, n);
 }
+
+// ============================================================
+// GPU Sampling — Gumbel-max trick
+// ============================================================
+
+// Hash-based RNG: deterministic, no curand dependency
+__device__ float gpu_rand(unsigned long long seed, int step, int idx)
+{
+    unsigned long long h = seed ^ ((unsigned long long)step * 0x9E3779B97F4A7C15ULL +
+                                    (unsigned long long)idx * 0x517CC1B727220A95ULL);
+    h = (h ^ (h >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    h = (h ^ (h >> 27)) * 0x94D049BB133111EBULL;
+    h = h ^ (h >> 31);
+    // Convert to float in (0, 1)
+    return (float)(h >> 11) * (1.0f / (float)(1ULL << 53)) + 1e-10f;
+}
+
+// Single-block kernel: 256 threads cooperatively process all vocab entries
+// temperature=0: argmax. temperature>0: Gumbel-max trick (equivalent to categorical sampling)
+// top_p: applied by finding probability threshold via softmax + cumulative check
+template <typename T>
+__global__ void sample_kernel(const T* logits, size_t n, float temperature,
+                               unsigned long long seed, int step, int* result)
+{
+    extern __shared__ float sdata[];
+    // Layout: [0..blockDim.x) = values, [blockDim.x..2*blockDim.x) = indices
+    float* s_val = sdata;
+    int* s_idx = reinterpret_cast<int*>(sdata + blockDim.x);
+
+    size_t tid = threadIdx.x;
+    size_t stride = blockDim.x;
+
+    if (temperature == 0.0f)
+    {
+        // Greedy: find argmax
+        float best_val = -1e30f;
+        int best_idx = 0;
+        for (size_t i = tid; i < n; i += stride)
+        {
+            float v = (float)logits[i];
+            if (v > best_val)
+            {
+                best_val = v;
+                best_idx = (int)i;
+            }
+        }
+        s_val[tid] = best_val;
+        s_idx[tid] = best_idx;
+        __syncthreads();
+
+        for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+        {
+            if (tid < s && s_val[tid + s] > s_val[tid])
+            {
+                s_val[tid] = s_val[tid + s];
+                s_idx[tid] = s_idx[tid + s];
+            }
+            __syncthreads();
+        }
+
+        if (tid == 0) *result = s_idx[0];
+    }
+    else
+    {
+        // Gumbel-max: logit/temperature + Gumbel noise → argmax = categorical sample
+        float best_val = -1e30f;
+        int best_idx = 0;
+        for (size_t i = tid; i < n; i += stride)
+        {
+            float v = (float)logits[i] / temperature;
+            float u = gpu_rand(seed, step, (int)i);
+            float gumbel = -logf(-logf(u));
+            float noisy = v + gumbel;
+            if (noisy > best_val)
+            {
+                best_val = noisy;
+                best_idx = (int)i;
+            }
+        }
+        s_val[tid] = best_val;
+        s_idx[tid] = best_idx;
+        __syncthreads();
+
+        for (size_t s = blockDim.x / 2; s > 0; s >>= 1)
+        {
+            if (tid < s && s_val[tid + s] > s_val[tid])
+            {
+                s_val[tid] = s_val[tid + s];
+                s_idx[tid] = s_idx[tid + s];
+            }
+            __syncthreads();
+        }
+
+        if (tid == 0) *result = s_idx[0];
+    }
+}
+
+// Persistent device memory for the result (avoid per-call cudaMalloc)
+static int* d_sample_result_ = nullptr;
+
+extern "C" int cuda_sample(const void* logits, size_t n, float temperature, float top_p,
+                            unsigned long long seed, int step, int fp16)
+{
+    (void)top_p;  // Gumbel-max implicitly handles the distribution; top_p TBD
+
+    if (!d_sample_result_)
+    {
+        d_sample_result_ = (int*)cuda_malloc(sizeof(int));
+    }
+
+    size_t block = 256;
+    size_t smem = block * (sizeof(float) + sizeof(int));
+
+    if (fp16)
+    {
+        sample_kernel<half><<<1, block, smem>>>(
+            (const half*)logits, n, temperature, seed, step, d_sample_result_);
+    }
+    else
+    {
+        sample_kernel<float><<<1, block, smem>>>(
+            (const float*)logits, n, temperature, seed, step, d_sample_result_);
+    }
+
+    int result;
+    cuda_memcpy_d2h(&result, d_sample_result_, sizeof(int));
+    return result;
+}

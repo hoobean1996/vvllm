@@ -104,6 +104,12 @@ void cuda_cublas_hgemm_fp16(void* out_fp16, const void* inp_fp16, const void* we
 // FP16 → FP32 conversion
 void cuda_fp16_to_fp32(float* out, const void* in, size_t n);
 
+// GPU sampling: returns sampled token ID
+// Greedy (temperature=0): argmax
+// Stochastic (temperature>0): temperature scale + Gumbel-max trick
+int cuda_sample(const void* logits, size_t n, float temperature, float top_p,
+                unsigned long long seed, int step, int fp16);
+
 #ifdef __cplusplus
 }
 #endif

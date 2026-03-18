@@ -147,7 +147,15 @@ int main(int argc, char* argv[])
 
     for (int step = 0; step < FLAGS_max_tokens; step++)
     {
-        int next_token = sampler.sample(logits);
+        // Try GPU sampling first (avoids 600KB logits download)
+        int next_token = backend.sample_gpu(logits.data(), logits.size(),
+                                            static_cast<float>(FLAGS_temperature),
+                                            static_cast<float>(FLAGS_top_p), FLAGS_seed, step);
+        if (next_token < 0)
+        {
+            // CPU fallback
+            next_token = sampler.sample(logits);
+        }
 
         if (is_eos(next_token)) break;
 

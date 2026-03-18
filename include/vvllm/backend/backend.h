@@ -97,6 +97,10 @@ public:
     /// Return the device pointer for a host buffer if it has a valid GPU mirror.
     /// Returns nullptr for CPU backends or when no valid mirror exists.
     virtual const void* device_ptr(const void* /*host_ptr*/) const { return nullptr; }
+
+    /// Sample a token from logits on the device. Returns -1 if not supported (CPU).
+    virtual int sample_gpu(const float* /*logits*/, std::size_t /*n*/, float /*temperature*/,
+                           float /*top_p*/, std::uint64_t /*seed*/, int /*step*/) { return -1; }
 };
 
 std::unique_ptr<Backend> create_backend(BackendKind kind);
