@@ -15,6 +15,7 @@ void cuda_free_host(void* ptr);
 void cuda_memcpy_h2d(void* dst, const void* src, size_t bytes);
 void cuda_memcpy_d2h(void* dst, const void* src, size_t bytes);
 void cuda_memcpy_d2d(void* dst, const void* src, size_t bytes);
+void cuda_memcpy_auto(void* dst, const void* src, size_t bytes);  // auto-detect direction
 void cuda_sync();
 
 // Returns 0 on success, fills name buffer with device name

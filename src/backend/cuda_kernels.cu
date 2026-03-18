@@ -558,6 +558,11 @@ extern "C" void cuda_memcpy_d2d(void* dst, const void* src, size_t bytes)
     CUDA_CHECK(cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToDevice));
 }
 
+extern "C" void cuda_memcpy_auto(void* dst, const void* src, size_t bytes)
+{
+    CUDA_CHECK(cudaMemcpy(dst, src, bytes, cudaMemcpyDefault));
+}
+
 extern "C" void cuda_sync() { CUDA_CHECK(cudaDeviceSynchronize()); }
 
 extern "C" int cuda_init_device(char* name_buf, size_t name_buf_size)

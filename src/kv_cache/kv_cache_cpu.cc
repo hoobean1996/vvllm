@@ -25,8 +25,6 @@ const float* KVCacheCPU::k(std::size_t layer) const { return k_cache_[layer].dat
 
 const float* KVCacheCPU::v(std::size_t layer) const { return v_cache_[layer].data(); }
 
-void KVCacheCPU::advance(std::size_t num_tokens) { seq_len_ += num_tokens; }
-
 void KVCacheCPU::reset()
 {
     for (auto& kc : k_cache_) kc.clear();

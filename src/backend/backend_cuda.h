@@ -49,6 +49,7 @@ public:
                           std::size_t num_kv_heads, std::size_t head_dim, float scale) override;
     void begin_forward() override;
     void flush(const void* ptr, std::size_t bytes) override;
+    const void* device_ptr(const void* host_ptr) const override;
 
 private:
     struct GpuBuf

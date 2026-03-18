@@ -94,6 +94,9 @@ public:
     /// No-op for CPU backends. GPU backends download if the device copy is newer.
     virtual void flush(const void* /*ptr*/, std::size_t /*bytes*/) {}
 
+    /// Return the device pointer for a host buffer if it has a valid GPU mirror.
+    /// Returns nullptr for CPU backends or when no valid mirror exists.
+    virtual const void* device_ptr(const void* /*host_ptr*/) const { return nullptr; }
 };
 
 std::unique_ptr<Backend> create_backend(BackendKind kind);

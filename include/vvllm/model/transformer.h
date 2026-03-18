@@ -126,12 +126,20 @@ std::vector<float> transformer_forward(const std::vector<TransformerBlock<Attn>>
         backend.rope(q.data(), k_new.data(), seq_len, num_heads, num_kv_heads, head_dim, pos,
                      rope_theta);
 
-        // Flush K/V from GPU mirrors to CPU (no-op for CPU backends)
-        backend.flush(k_new.data(), seq_len * kv_dim * sizeof(float));
-        backend.flush(v_new.data(), seq_len * kv_dim * sizeof(float));
-
-        // Append new K/V to cache and get pointers
-        kv_cache.append(layer_idx, k_new.data(), v_new.data(), seq_len);
+        // Append new K/V to cache — use GPU mirrors when available (D2D),
+        // otherwise flush to CPU and pass host pointers (H2D)
+        auto* d_k = static_cast<const float*>(backend.device_ptr(k_new.data()));
+        auto* d_v = static_cast<const float*>(backend.device_ptr(v_new.data()));
+        if (d_k && d_v)
+        {
+            kv_cache.append(layer_idx, d_k, d_v, seq_len);
+        }
+        else
+        {
+            backend.flush(k_new.data(), seq_len * kv_dim * sizeof(float));
+            backend.flush(v_new.data(), seq_len * kv_dim * sizeof(float));
+            kv_cache.append(layer_idx, k_new.data(), v_new.data(), seq_len);
+        }
         const float* cache_k = kv_cache.k(layer_idx);
         const float* cache_v = kv_cache.v(layer_idx);
 

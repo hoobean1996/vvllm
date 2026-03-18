@@ -15,9 +15,14 @@ public:
                         std::size_t num_tokens) = 0;
     virtual const float* k(std::size_t layer) const = 0;
     virtual const float* v(std::size_t layer) const = 0;
-    virtual void advance(std::size_t num_tokens) = 0;
+
+    void advance(std::size_t num_tokens) { seq_len_ += num_tokens; }
     virtual void reset() = 0;
     virtual void truncate(std::size_t new_seq_len) = 0;
+
+protected:
+    std::size_t seq_len_ = 0;
+    std::size_t kv_dim_ = 0;
 };
 
 }  // namespace vvllm

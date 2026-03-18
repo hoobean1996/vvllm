@@ -61,11 +61,11 @@ void KVCacheCUDA::append(std::size_t layer, const float* k, const float* v,
         kv.capacity = new_cap;
     }
 
-    // Copy new tokens from CPU to GPU KV buffer
+    // Copy new tokens to GPU KV buffer (auto-detects host or device source)
     std::size_t token_bytes = num_tokens * kv_dim_ * sizeof(float);
     std::size_t offset_bytes = seq_len_ * kv_dim_ * sizeof(float);
-    cuda_memcpy_h2d(static_cast<char*>(kv.d_k) + offset_bytes, k, token_bytes);
-    cuda_memcpy_h2d(static_cast<char*>(kv.d_v) + offset_bytes, v, token_bytes);
+    cuda_memcpy_auto(static_cast<char*>(kv.d_k) + offset_bytes, k, token_bytes);
+    cuda_memcpy_auto(static_cast<char*>(kv.d_v) + offset_bytes, v, token_bytes);
 }
 
 const float* KVCacheCUDA::k(std::size_t layer) const
@@ -79,8 +79,6 @@ const float* KVCacheCUDA::v(std::size_t layer) const
     if (layer >= layers_.size()) return nullptr;
     return static_cast<const float*>(layers_[layer].d_v);
 }
-
-void KVCacheCUDA::advance(std::size_t num_tokens) { seq_len_ += num_tokens; }
 
 void KVCacheCUDA::reset() { seq_len_ = 0; }
 

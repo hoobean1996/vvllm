@@ -159,6 +159,16 @@ void* BackendCUDA::gpu_output(const void* cpu_ptr, std::size_t bytes, bool& reus
     return d;
 }
 
+const void* BackendCUDA::device_ptr(const void* host_ptr) const
+{
+    auto it = mirrors_.find(host_ptr);
+    if (it != mirrors_.end() && it->second.valid)
+    {
+        return it->second.d_ptr;
+    }
+    return nullptr;
+}
+
 void BackendCUDA::begin_forward()
 {
     for (auto& [_, mirror] : mirrors_)
