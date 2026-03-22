@@ -366,6 +366,13 @@ void Executable::allocate_pool(std::size_t seq_len)
         pool_.emplace_back(Tensor({plan_.slot_sizes[i]}, compute_dtype, dev));
 
     compile(seq_len);
+    compiled_seq_len_ = seq_len;
+
+    // Pre-allocate logits buffers
+    std::size_t vocab = config_.vocab_size;
+    logits_buf_ = Tensor({vocab}, compute_dtype, dev);
+    if (compute_dtype == DType::Float16)
+        logits_fp32_buf_ = Tensor({vocab}, DType::Float32, dev);
 }
 
 Tensor Executable::run(const std::vector<int>& token_ids, std::size_t pos,
@@ -382,36 +389,9 @@ Tensor Executable::run(const std::vector<int>& token_ids, std::size_t pos,
     std::size_t elem = dtype_size(compute_dtype);
 
     // Allocate pool + compile on first run or if seq_len changed
-    if (ops_.empty())
+    if (compiled_seq_len_ != seq_len)
     {
         allocate_pool(seq_len);
-    }
-    else
-    {
-        // Check if we need to re-plan for different seq_len
-        MemoryPlan new_plan = plan_memory(*graph_, config_, seq_len);
-        bool needs_realloc = (new_plan.num_slots() != plan_.num_slots());
-        if (!needs_realloc)
-        {
-            for (std::size_t i = 0; i < new_plan.num_slots(); i++)
-            {
-                if (new_plan.slot_sizes[i] > plan_.slot_sizes[i])
-                {
-                    needs_realloc = true;
-                    break;
-                }
-            }
-        }
-        if (needs_realloc)
-        {
-            allocate_pool(seq_len);
-        }
-        else if (new_plan.slot_index != plan_.slot_index ||
-                 new_plan.inplace_values != plan_.inplace_values)
-        {
-            plan_ = std::move(new_plan);
-            compile(seq_len);
-        }
     }
 
     backend_.begin_forward();
@@ -581,22 +561,22 @@ Tensor Executable::run(const std::vector<int>& token_ids, std::size_t pos,
         }
     }
 
-    // Copy logits out of pool
+    // Copy logits into pre-allocated buffer (no Tensor allocation per run)
     std::size_t logits_elems = config_.vocab_size;
-    Tensor logits({logits_elems}, compute_dtype, dev);
-    device_copy(logits.data<float>(), dev, pool_[logits_slot_].data<float>(), dev,
+    device_copy(logits_buf_.data<float>(), dev, pool_[logits_slot_].data<float>(), dev,
                 logits_elems * elem);
 
     kv_cache.advance(seq_len);
 
     if (compute_dtype == DType::Float16)
     {
-        Tensor logits_fp32({logits_elems}, DType::Float32, dev);
-        backend_.fp16_to_fp32(logits_fp32.data<float>(), logits.raw_data(), logits_elems);
-        return logits_fp32;
+        backend_.fp16_to_fp32(logits_fp32_buf_.data<float>(), logits_buf_.raw_data(),
+                              logits_elems);
+        // Return non-owning view (sampler only reads it before next run)
+        return logits_fp32_buf_.view(0, {logits_elems});
     }
 
-    return logits;
+    return logits_buf_.view(0, {logits_elems});
 }
 
 }  // namespace ir

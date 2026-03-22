@@ -105,6 +105,13 @@ private:
     /// Logits output slot index.
     uint32_t logits_slot_;
 
+    /// Cached seq_len that ops_ and pool_ were compiled for.
+    std::size_t compiled_seq_len_ = 0;
+
+    /// Pre-allocated logits tensor (reused across runs, avoids alloc+copy).
+    mutable Tensor logits_buf_;
+    mutable Tensor logits_fp32_buf_;
+
     /// Build the pre-compiled instruction list.
     void compile(std::size_t seq_len);
 
