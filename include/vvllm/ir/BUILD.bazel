@@ -1,0 +1,42 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "graph",
+    hdrs = ["graph.h"],
+    strip_include_prefix = "//include",
+    deps = [
+        "//include/vvllm/tensor",
+    ],
+)
+
+cc_library(
+    name = "graph_builder",
+    hdrs = ["graph_builder.h"],
+    strip_include_prefix = "//include",
+    deps = [
+        ":graph",
+        "//include/vvllm/config",
+    ],
+)
+
+cc_library(
+    name = "optimize",
+    hdrs = ["optimize.h"],
+    strip_include_prefix = "//include",
+    deps = [
+        ":graph",
+    ],
+)
+
+cc_library(
+    name = "executable",
+    hdrs = ["executable.h"],
+    strip_include_prefix = "//include",
+    deps = [
+        ":graph",
+        "//include/vvllm/backend",
+        "//include/vvllm/config",
+        "//include/vvllm/kv_cache",
+        "//include/vvllm/tensor",
+    ],
+)

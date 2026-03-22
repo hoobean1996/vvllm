@@ -1,0 +1,49 @@
+cc_library(
+    name = "graph",
+    srcs = ["graph.cc"],
+    deps = [
+        "//include/vvllm/ir:graph",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "graph_builder",
+    srcs = ["graph_builder.cc"],
+    deps = [
+        ":graph",
+        "//include/vvllm/ir:graph_builder",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "optimize",
+    srcs = ["optimize.cc"],
+    deps = [
+        "//include/vvllm/ir:optimize",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "executable",
+    srcs = ["executable.cc"],
+    deps = [
+        ":graph",
+        "//include/vvllm/ir:executable",
+        "//src/tensor",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_binary(
+    name = "dump_graph",
+    srcs = ["dump_graph.cc"],
+    deps = [
+        ":graph",
+        ":graph_builder",
+        "//src/config",
+        "@gflags//:gflags",
+    ],
+)

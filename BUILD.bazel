@@ -28,5 +28,9 @@ refresh_compile_commands(
         "//bin/qwen:qwen": "",
         "//src:vvllm": "",
         "//src/model:model_bench": "",
+        "//src/ir:graph": "",
+        "//src/ir:graph_builder": "",
+        "//src/ir:optimize": "",
+        "//src/ir:executable": "",
     },
 )
