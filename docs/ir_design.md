@@ -225,16 +225,98 @@ model.norm.weight
 // Output: %N+2 (logits)
 ```
 
+## Memory Planning Pass
+
+### Problem
+
+无 memory planning 时，每个 OpNode 的输出分配独立的 GPU buffer。
+Qwen2-0.5B 有 533 个 op，每次 forward 触发数百次 cudaMalloc/cudaFree。
+对比 interpreted path 只用 7 个 scratch buffer 复用 24 层，overhead 巨大。
+
+### Algorithm: Liveness-Based Greedy Buffer Reuse
+
+核心思想：分析每个 Value 的生命周期（从产生到最后一次被消费），生命周期不重叠的 Value 可以共享同一块 buffer。
+
+**Step 1 — Liveness Analysis**
+
+遍历所有 node（拓扑序），记录每个 Value 的 last use（最后一个消费它的 node 的序号）：
+
+```
+last_use[value_id] = max node_index where value appears as input
+```
+
+Graph output 标记为 "永不释放"（last_use = ∞）。
+
+**Step 2 — Greedy Best-Fit Allocation**
+
+按拓扑序遍历每个 node：
+
+```
+for each node_i in topological order:
+    // 1. Free: 释放 last_use == i 的 input value 的 buffer slot
+    for each input of node_i:
+        if last_use[input] == i:
+            free_pool.add(slot_of[input])
+
+    // 2. Allocate: 为 output value 分配 buffer slot
+    for each output of node_i:
+        needed = compute_buffer_size(output, seq_len)
+        slot = free_pool.best_fit(needed)  // 找 >= needed 的最小 slot
+        if slot found:
+            reuse slot
+        else:
+            allocate new slot (with size = needed)
+        slot_of[output] = slot
+```
+
+**Step 3 — Pool Pre-allocation**
+
+`Executable` 构造时根据 plan 预分配固定数量的 Tensor：
+
+```cpp
+pool_.resize(plan.num_slots());
+for (i = 0; i < num_slots; i++)
+    pool_[i] = Tensor({slot_sizes[i]}, dtype, device);
+```
+
+每次 `run()` 直接复用 pool，zero allocation。
+
+### Result
+
+对 Qwen2-0.5B (24 layers, 533 ops)：
+
+| | 无 Memory Planning | 有 Memory Planning |
+|---|---|---|
+| **Buffer 分配数** | ~270 per forward | **预分配固定 pool，forward 内 0 次** |
+| **Decode tok/s** | 237 | **363 (+53%)** |
+
+Buffer 复用模式和 interpreted path 的 scratch buffer 等效：同类 op（如每层的 RMSNorm 输出）共享同一个 slot。
+
+### Data Structure
+
+```cpp
+struct MemoryPlan {
+    unordered_map<uint32_t, uint32_t> slot_index;  // value_id → slot_id
+    vector<size_t> slot_sizes;                      // slot_id → max elements
+};
+```
+
+### Limitations & Future Work
+
+- 当前 plan 是 per-seq_len 的，seq_len 变化时需重新 plan（prefill vs decode 各一次）
+- Best-fit 策略简单但够用；更优的做法是 linear scan + interval graph coloring
+- 未来可以 plan 一次、覆盖 max_seq_len，避免 re-plan
+
 ## Future: Optimization Passes
 
-图构建完成后，后续可以添加的优化 pass（本阶段不实现）：
+图构建完成后，后续可以添加的优化 pass：
 
 1. **Op Fusion**: RMSNorm + Linear → FusedRMSNormLinear（省一次显存读写）
-2. **Memory Planning**: 静态分配 scratch buffer，复用不再需要的中间值内存
+2. ~~**Memory Planning**: 静态分配 scratch buffer，复用不再需要的中间值内存~~ ✅ 已实现
 3. **Dead Code Elimination**: 删除 users 为空的节点
 4. **Constant Folding**: 编译期计算 RoPE frequency table 等常量
 
-## Future: Codegen & Execution
+## Codegen & Execution
 
 编译路径的完整流水线：
 
@@ -242,14 +324,17 @@ model.norm.weight
 ModelConfig + Weights
        │
        ▼
-  build_graph()          ← 本阶段实现
+  build_graph()          ✅ 已实现
        │
        ▼
-  optimize(graph)        ← Phase 2
+  optimize(graph)        ← no-op placeholder (future: fusion passes)
        │
        ▼
-  codegen(graph)         ← Phase 3: 映射回 Backend kernel 调用
+  plan_memory(graph)     ✅ 已实现 — liveness analysis + greedy reuse
        │
        ▼
-  Executable::run()      ← Phase 3: 执行优化后的计划
+  Executable(graph)      ✅ 已实现 — pre-allocate pool, walk graph, dispatch to Backend
+       │
+       ▼
+  Executable::run()      ✅ 已实现 — zero-alloc forward pass
 ```

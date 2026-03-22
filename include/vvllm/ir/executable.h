@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "vvllm/backend/backend.h"
@@ -17,8 +19,6 @@ namespace ir
 {
 
 /// A weight map resolves IR weight names to raw pointers + metadata.
-/// Built from safetensors weights after the same fusing/quantization as the
-/// interpreted path.
 struct WeightRef
 {
     const float* fp32 = nullptr;
@@ -29,8 +29,57 @@ struct WeightRef
 
 using WeightMap = std::unordered_map<std::string, WeightRef>;
 
-/// Compiled execution plan: walks the IR graph and dispatches to Backend.
-/// Created once at startup, called for every forward pass.
+/// Memory plan: maps each Value id to a pre-allocated buffer slot.
+struct MemoryPlan
+{
+    std::unordered_map<uint32_t, uint32_t> slot_index;
+    std::vector<std::size_t> slot_sizes;
+    std::unordered_set<uint32_t> inplace_values;
+    std::size_t num_slots() const { return slot_sizes.size(); }
+};
+
+/// Analyze value lifetimes and compute a buffer reuse plan.
+MemoryPlan plan_memory(const Graph& graph, const ModelConfig& config, std::size_t seq_len);
+
+/// Pre-compiled instruction — all pointers and parameters resolved at construction time.
+/// No hash lookups, no variant gets, no string comparisons at run time.
+struct ResolvedOp
+{
+    OpType op;
+
+    // Buffer slot indices (into pool_). UINT32_MAX = unused.
+    uint32_t out_slot;
+    uint32_t out_slot2;     // RoPE second output
+    uint32_t in_slots[4];   // up to 4 inputs
+    uint8_t num_inputs;
+
+    // Pre-resolved weight pointers
+    const float* weight_fp32;
+    const int8_t* weight_int8;
+    const float* weight_scales;
+    const float* bias;
+    bool weight_quantized;
+
+    // Pre-resolved residual slot (for LinearAdd)
+    uint32_t residual_slot;
+
+    // Op-specific params (pre-extracted, no Attributes lookup)
+    std::size_t N;      // Linear/LinearAdd output dim
+    std::size_t K;      // Linear/LinearAdd input dim
+    float eps;          // RMSNorm
+    std::size_t hidden; // RMSNorm hidden dim
+    std::size_t nh;     // num_heads (RoPE, Attention)
+    std::size_t nkv;    // num_kv_heads
+    std::size_t hd;     // head_dim
+    float theta;        // RoPE theta
+    std::size_t layer;  // Attention layer index
+    std::size_t intermediate; // SiLUMul
+    bool is_logits;     // Linear: final logits projection
+    bool rope_q_inplace;
+    bool rope_k_inplace;
+};
+
+/// Compiled execution plan with pre-resolved instruction list.
 class Executable
 {
 public:
@@ -46,17 +95,24 @@ private:
     Backend& backend_;
     const ModelConfig& config_;
 
-    /// Resolve a Weight node's name attribute to a WeightRef.
-    const WeightRef& resolve_weight(const OpNode* node) const;
+    /// Memory plan and buffer pool.
+    MemoryPlan plan_;
+    mutable std::vector<Tensor> pool_;
 
-    /// Get the raw float pointer for a Value from the buffer map.
-    float* buf(Value* v) const;
-    const float* cbuf(Value* v) const;
+    /// Pre-compiled instruction list (built once at construction).
+    std::vector<ResolvedOp> ops_;
 
-    /// Per-run buffer allocation: maps Value id -> Tensor.
-    mutable std::unordered_map<uint32_t, Tensor> buffers_;
-    /// Per-run weight pointer cache: maps Value id -> raw pointer.
-    mutable std::unordered_map<uint32_t, const void*> weight_ptrs_;
+    /// Logits output slot index.
+    uint32_t logits_slot_;
+
+    /// Build the pre-compiled instruction list.
+    void compile(std::size_t seq_len);
+
+    /// Allocate pool and compile instructions for a given seq_len.
+    void allocate_pool(std::size_t seq_len);
+
+    /// Direct buffer access via slot index (no hash lookup).
+    float* slot_buf(uint32_t slot) const { return pool_[slot].data<float>(); }
 };
 
 }  // namespace ir
